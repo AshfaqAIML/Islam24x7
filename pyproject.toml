@@ -15,6 +15,10 @@ dependencies = [
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
     "loguru>=0.7",
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "psycopg[binary]>=3.1",
+    "pgvector>=0.3",
 ]
 
 [project.optional-dependencies]
@@ -40,11 +44,14 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["SIM"]
+"src/knowledge_base/database/migrations/**" = ["E501", "I001", "UP035", "UP007"]
+"src/knowledge_base/database/enums.py" = ["UP042"]
 
 [tool.mypy]
 python_version = "3.12"
 strict = true
 warn_unused_ignores = true
+exclude = "src/knowledge_base/database/migrations/"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
