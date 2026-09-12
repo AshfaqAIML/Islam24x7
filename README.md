@@ -120,27 +120,52 @@ mypy src                     # type checking
 ## Project layout
 
 ```
-src/knowledge_base/
-├── __init__.py
-├── config.py               # pydantic-settings configuration (KB_* env)
-├── logging.py              # loguru structured logging
-├── __main__.py             # python -m knowledge_base entry
-├── core/
-│   └── hashing.py          # SHA-256 source/content hashing
-├── cli/
-│   ├── __init__.py         # argparse CLI (knowledge-base script)
-│   └── commands.py         # command implementations
-└── normalization/          # implemented
-    ├── models.py           # NormalizationConfig / Result / Report
-    ├── normalize.py        # normalize_text()
-    └── report.py           # JSON + Markdown reports
-docs/
-└── architecture.md          # full architecture + milestones
-tests/
-├── conftest.py
-├── test_config.py           # config + CLI tests
-└── test_normalization.py    # proves original text is never altered
+Islam24x7/
+├── data/
+│   ├── raw/                      # untouched source material
+│   │   ├── quran/                # mushaf text, translations
+│   │   ├── hadith/               # hadith collections
+│   │   └── books/                # fiqh/ tafsir/ aqeedah/ seerah/ history/ other/
+│   ├── processed/                # derived content (extracted, ocr, normalized, ...)
+│   ├── exports/                  # portable knowledge-base exports
+│   └── quarantine/               # failed validation/processing
+├── docs/
+│   └── architecture.md           # full architecture + milestones
+├── src/knowledge_base/
+│   ├── __init__.py
+│   ├── config.py                 # pydantic-settings configuration (KB_* env)
+│   ├── logging.py                # loguru structured logging
+│   ├── __main__.py               # python -m knowledge_base entry
+│   ├── core/
+│   │   └── hashing.py            # SHA-256 source/content hashing
+│   ├── cli/
+│   │   ├── __init__.py           # argparse CLI (knowledge-base script)
+│   │   └── commands.py           # command implementations
+│   ├── pipeline/                 # ingestion pipeline stages
+│   │   ├── ingest/               # registration, hashing, quarantine
+│   │   ├── inspect/              # PDF inspection + classification
+│   │   ├── extract/              # page-by-page text extraction
+│   │   ├── ocr/                  # OCR for scanned pages
+│   │   ├── metadata/             # book metadata + review
+│   │   ├── structure/            # chapter/section/block detection
+│   │   ├── chunk/                # stable-ID chunking
+│   │   ├── index/                # full-text indexing
+│   │   ├── embed/                # embedding generation
+│   │   └── validate/             # validation + provenance audit
+│   ├── normalization/            # implemented
+│   │   ├── models.py             # NormalizationConfig / Result / Report
+│   │   ├── normalize.py          # normalize_text()
+│   │   └── report.py             # JSON + Markdown reports
+│   ├── database/                 # SQLAlchemy models, Alembic migrations
+│   └── search/                   # query API
+└── tests/
+    ├── conftest.py
+    ├── test_config.py            # config + CLI tests
+    └── test_normalization.py     # proves original text is never altered
 ```
+
+The raw data directories (`data/raw/**`) are tracked; derived data
+(`processed/`, `exports/`, `quarantine/`) is gitignored.
 
 ## Security
 

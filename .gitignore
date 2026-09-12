@@ -16,10 +16,14 @@ venv/
 .mypy_cache/
 .ruff_cache/
 
-# Data - derived and sensitive content is not committed
-data/processed/
-data/exports/
-data/quarantine/
+# Data - derived and sensitive content is not committed.
+# README files explaining each directory remain tracked.
+data/processed/*
+!data/processed/README.md
+data/exports/*
+!data/exports/README.md
+data/quarantine/*
+!data/quarantine/README.md
 data/raw/**/*.pdf
 
 # OS
