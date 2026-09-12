@@ -55,6 +55,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="normalization configuration to apply (default: search)",
     )
 
+    ingest = sub.add_parser(
+        "ingest",
+        help="Register files from a directory into the knowledge base",
+    )
+    ingest.add_argument("dir", type=Path, help="directory tree containing source files")
+    ingest.add_argument(
+        "--category",
+        default="books",
+        help="subdirectory under data/raw to store ingested files (default: books)",
+    )
+    ingest.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="hash and report without writing anything",
+    )
+
     return parser
 
 
@@ -81,6 +97,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         commands.cmd_glob(pattern=args.pattern)
     elif command == "normalize":
         return commands.cmd_normalize(args.file, args.config)
+    elif command == "ingest":
+        return commands.cmd_ingest(args.dir, args.category, dry_run=args.dry_run)
     return 0
 
 

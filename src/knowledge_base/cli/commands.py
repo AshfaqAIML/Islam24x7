@@ -87,4 +87,37 @@ def cmd_normalize(file: Path, config_name: str) -> int:
     return 0
 
 
-__all__ = ["cmd_env", "cmd_glob", "cmd_normalize", "cmd_version"]
+def cmd_ingest(source_dir: Path, category: str, *, dry_run: bool = False) -> int:
+    """Register every source file under ``source_dir`` into the KB database."""
+    from collections import Counter
+
+    from knowledge_base.database import create_app_engine, make_session_factory, session_scope
+    from knowledge_base.logging import logger
+    from knowledge_base.pipeline.ingest.ingest import ingest_directory
+
+    settings = _settings()
+    engine = create_app_engine(settings.database_url)
+    factory = make_session_factory(engine)
+
+    with session_scope(factory) as session:
+        results = ingest_directory(
+            source_dir,
+            session=session,
+            category=category,
+            dry_run=dry_run,
+            settings=settings,
+        )
+
+    summary = Counter(r.status for r in results)
+    logger.info("Ingestion finished: {}", dict(summary))
+    for status, count in summary.most_common():
+        print(f"{status:14s} {count}")
+    if results and summary["failed"]:
+        print("failures:", file=sys.stderr)
+        for result in results:
+            if result.status == "failed":
+                print(f"  {result.path}: {result.reason}", file=sys.stderr)
+    return 0
+
+
+__all__ = ["cmd_env", "cmd_glob", "cmd_ingest", "cmd_normalize", "cmd_version"]

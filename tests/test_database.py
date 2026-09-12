@@ -9,18 +9,15 @@ from __future__ import annotations
 
 import os
 import uuid
-from collections.abc import Iterator
 from typing import Any
 
 import pytest
 from sqlalchemy import select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
-from knowledge_base.database import reset_schema
 from knowledge_base.database.base import Base
-from knowledge_base.database.session import create_app_engine
 
 _TEST_URL = os.environ.get(
     "KB_TEST_DATABASE_URL",
@@ -30,40 +27,6 @@ _TEST_URL = os.environ.get(
 
 def _module_tables() -> set[str]:
     return set(Base.metadata.tables.keys())
-
-
-@pytest.fixture(scope="session")
-def db_engine() -> Iterator[Engine]:
-    """Engine bound to the test database; schema reset once per session."""
-    if "sqlite" in _TEST_URL:
-        pytest.skip("PostgreSQL only (pgvector/tsvector/enums)")
-    engine = create_app_engine(_TEST_URL, pool_pre_ping=True)
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-    except Exception as exc:  # pragma: no cover - infra-dependent
-        engine.dispose()
-        pytest.skip(f"test database unreachable: {exc}")
-    reset_schema(engine)
-    Base.metadata.create_all(engine)
-    yield engine
-    engine.dispose()
-
-
-@pytest.fixture()
-def db(db_engine: Engine) -> Iterator[Session]:
-    """Fresh transaction for each test; rolled back and truncated afterwards."""
-    factory = sessionmaker(bind=db_engine, expire_on_commit=False, autoflush=False)
-    session = factory()
-    session.begin()
-    try:
-        yield session
-    finally:
-        session.rollback()
-        session.close()
-        tables = ", ".join(table.name for table in reversed(Base.metadata.sorted_tables))
-        with db_engine.begin() as conn:
-            conn.execute(text(f"TRUNCATE {tables} CASCADE"))
 
 
 def _commit(session: Session) -> None:
