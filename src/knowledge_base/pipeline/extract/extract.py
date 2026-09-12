@@ -186,7 +186,10 @@ def _has_extractable_text(session: Session, source_file_id: str) -> bool:
     )
     if job is None:
         return True
-    return bool(job.manifest.get("pages_with_text", 0) > 0)
+    text_pages = job.manifest.get("text_pages", job.manifest.get("pages_with_text", 0))
+    if text_pages is None:
+        return True
+    return int(text_pages) > 0
 
 
 def extract_all(

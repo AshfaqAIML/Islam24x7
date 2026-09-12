@@ -55,6 +55,22 @@ class JobStatus(str, Enum):
     FAILED = "failed"
 
 
+class PdfClassification(str, Enum):
+    """How a PDF is classified by the inspection stage.
+
+    ``TEXT_PDF`` has clean selectable text on (nearly) every page.
+    ``SCANNED_PDF`` is image-only and must go through OCR.
+    ``MIXED_PDF`` mixes text and scanned pages (or has enough blank pages
+    that OCR is still needed for part of the book).
+    ``INVALID_PDF`` cannot be read at all (corrupt, missing, encrypted).
+    """
+
+    TEXT_PDF = "text_pdf"
+    SCANNED_PDF = "scanned_pdf"
+    MIXED_PDF = "mixed_pdf"
+    INVALID_PDF = "invalid_pdf"
+
+
 class ContentStatus(str, Enum):
     """Review / validation status of derived content.
 

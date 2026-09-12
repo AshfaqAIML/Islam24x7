@@ -159,14 +159,20 @@ def cmd_inspect(sha256: str | None, *, inspect_all: bool = False, limit: int | N
 
     for result in results:
         pages = result.page_count
-        with_text = result.pages_with_text
-        hint = result.language_hint or "-"
-        ocr = "OCR" if result.ocr_likely else "TEXT"
-        logger.info("inspect {} pages={} text={} lang={} {}",
-                    result.sha256[:12], pages, f"{with_text}/{pages}", hint, ocr)
+        label = result.classification.value.upper()
+        logger.info(
+            "inspect {} pages={} text={} scanned={} class={} lang={}",
+            result.sha256[:12],
+            pages,
+            result.text_pages,
+            result.scanned_pages,
+            label,
+            result.language_hint or "-",
+        )
         print(
-            f"{result.sha256[:12]:12s} pages={pages:<5d} text={with_text}/{pages}"
-            f"  lang={hint:<2s} {ocr:4s}  {result.report_path or result.error}"
+            f"{label:11s} {result.sha256[:12]} pages={pages:<5d} "
+            f"text={result.text_pages}/{pages} scanned={result.scanned_pages}"
+            f"  lang={result.language_hint or '-':<2s}  {result.summary_path or result.error}"
         )
     return 0
 
