@@ -83,6 +83,21 @@ def _build_parser() -> argparse.ArgumentParser:
         "--limit", type=int, default=None, help="cap the number of files with --all"
     )
 
+    extract = sub.add_parser(
+        "extract",
+        help="Extract page-by-page text from PDFs with a text layer",
+    )
+    extract.add_argument("--sha256", help="extract one source by sha256 prefix")
+    extract.add_argument(
+        "--all", dest="extract_all", action="store_true", help="extract all text-layer sources"
+    )
+    extract.add_argument(
+        "--limit", type=int, default=None, help="cap the number of files with --all"
+    )
+    extract.add_argument(
+        "--force", action="store_true", help="extract scanned sources too (empty pages)"
+    )
+
     return parser
 
 
@@ -112,7 +127,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     elif command == "ingest":
         return commands.cmd_ingest(args.dir, args.category, dry_run=args.dry_run)
     elif command == "inspect":
-        return commands.cmd_inspect(args.sha256, inspect_all=args.inspect_all, limit=args.limit)
+        return commands.cmd_inspect(
+            args.sha256, inspect_all=args.inspect_all, limit=args.limit
+        )
+    elif command == "extract":
+        return commands.cmd_extract(
+            args.sha256,
+            extract_all=args.extract_all,
+            limit=args.limit,
+            force=args.force,
+        )
     return 0
 
 

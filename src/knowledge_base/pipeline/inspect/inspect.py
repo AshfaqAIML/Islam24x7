@@ -14,6 +14,7 @@ records a ``ProcessingJob`` of type ``inspect``.
 from __future__ import annotations
 
 import json
+import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,8 +25,9 @@ from sqlalchemy.orm import Session
 
 from knowledge_base.config import Settings, get_settings
 from knowledge_base.database.enums import JobStatus, JobType
-from knowledge_base.database.models.sources import ProcessingJob, SourceFile
+from knowledge_base.database.models.sources import SourceFile
 from knowledge_base.logging import logger
+from knowledge_base.pipeline.jobs import upsert_processing_job
 
 _ARABIC_RANGES = (
     (0x0600, 0x06FF),  # Arabic
@@ -179,24 +181,14 @@ def _upsert_job(session: Session, result: InspectionResult, report_dir: Path) ->
         "language_hint": result.language_hint,
         "report": report_dir.name if result.report_path else None,
     }
-    job = session.scalar(
-        select(ProcessingJob).where(
-            ProcessingJob.source_file_id == result.source_file_id,
-            ProcessingJob.job_type == JobType.INSPECT,
-        )
+    upsert_processing_job(
+        session,
+        source_file_id=uuid.UUID(result.source_file_id),
+        job_type=JobType.INSPECT,
+        status=status,
+        manifest=manifest,
+        error=result.error,
     )
-    if job is None:
-        job = ProcessingJob(
-            source_file_id=result.source_file_id,
-            job_type=JobType.INSPECT,
-            status=status,
-            manifest=manifest,
-        )
-        session.add(job)
-    else:
-        job.status = status
-        job.manifest = manifest
-        job.error = result.error
 
 
 def inspect_all(
