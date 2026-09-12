@@ -71,6 +71,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="hash and report without writing anything",
     )
 
+    inspect = sub.add_parser(
+        "inspect",
+        help="Classify registered PDFs (text layer / OCR need / language)",
+    )
+    inspect.add_argument("--sha256", help="inspect one source by sha256 prefix")
+    inspect.add_argument(
+        "--all", dest="inspect_all", action="store_true", help="inspect all registered sources"
+    )
+    inspect.add_argument(
+        "--limit", type=int, default=None, help="cap the number of files with --all"
+    )
+
     return parser
 
 
@@ -99,6 +111,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return commands.cmd_normalize(args.file, args.config)
     elif command == "ingest":
         return commands.cmd_ingest(args.dir, args.category, dry_run=args.dry_run)
+    elif command == "inspect":
+        return commands.cmd_inspect(args.sha256, inspect_all=args.inspect_all, limit=args.limit)
     return 0
 
 

@@ -120,4 +120,55 @@ def cmd_ingest(source_dir: Path, category: str, *, dry_run: bool = False) -> int
     return 0
 
 
-__all__ = ["cmd_env", "cmd_glob", "cmd_ingest", "cmd_normalize", "cmd_version"]
+def cmd_inspect(sha256: str | None, *, inspect_all: bool = False, limit: int | None = None) -> int:
+    """Classify registered PDFs; print a compact summary per file."""
+    from sqlalchemy import select
+
+    from knowledge_base.database import create_app_engine, make_session_factory, session_scope
+    from knowledge_base.database.models.sources import SourceFile
+    from knowledge_base.logging import logger
+    from knowledge_base.pipeline.inspect.inspect import inspect_all as run_all
+    from knowledge_base.pipeline.inspect.inspect import inspect_file
+
+    settings = _settings()
+    engine = create_app_engine(settings.database_url)
+    factory = make_session_factory(engine)
+    report_dir = settings.data_dir / "processed" / "inspect"
+
+    with session_scope(factory) as session:
+        if sha256:
+            source = session.scalar(
+                select(SourceFile).where(SourceFile.sha256.startswith(sha256))
+            )
+            if source is None:
+                print(f"No source matching sha256 prefix {sha256!r}", file=sys.stderr)
+                return 1
+            results = [
+                inspect_file(
+                    source,
+                    session=session,
+                    report_dir=report_dir,
+                    data_dir=settings.data_dir,
+                )
+            ]
+        elif inspect_all:
+            results = run_all(session, settings=settings, limit=limit)
+        else:
+            print("Use --sha256 <prefix> or --all", file=sys.stderr)
+            return 2
+
+    for result in results:
+        pages = result.page_count
+        with_text = result.pages_with_text
+        hint = result.language_hint or "-"
+        ocr = "OCR" if result.ocr_likely else "TEXT"
+        logger.info("inspect {} pages={} text={} lang={} {}",
+                    result.sha256[:12], pages, f"{with_text}/{pages}", hint, ocr)
+        print(
+            f"{result.sha256[:12]:12s} pages={pages:<5d} text={with_text}/{pages}"
+            f"  lang={hint:<2s} {ocr:4s}  {result.report_path or result.error}"
+        )
+    return 0
+
+
+__all__ = ["cmd_env", "cmd_glob", "cmd_ingest", "cmd_inspect", "cmd_normalize", "cmd_version"]
