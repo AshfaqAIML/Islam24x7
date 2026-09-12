@@ -13,6 +13,8 @@ authors = [{ name = "Islam24x7" }]
 keywords = ["islamic", "knowledge-base", "quran", "hadith", "rag"]
 dependencies = [
     "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "loguru>=0.7",
 ]
 
 [project.optional-dependencies]
@@ -21,6 +23,9 @@ dev = [
     "mypy>=1.10",
     "ruff>=0.5",
 ]
+
+[project.scripts]
+knowledge-base = "knowledge_base.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

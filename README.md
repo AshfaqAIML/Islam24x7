@@ -12,10 +12,10 @@ knowledge base for later use by a web/mobile application and AI/RAG systems.
 
 ## Status
 
-This repository is being built incrementally. The first milestone
-(**normalization pipeline**) is implemented and tested; the full architecture
-and the remaining milestones are documented in
-[`docs/architecture.md`](docs/architecture.md).
+This repository is being built incrementally. The **project foundation**
+(packaging, environment, config, logging, CLI) and the **normalization
+pipeline** are implemented and tested; the full architecture and the remaining
+milestones are documented in [`docs/architecture.md`](docs/architecture.md).
 
 ## Requirements
 
@@ -28,6 +28,49 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[dev]"
 ```
+
+This installs the `knowledge-base` console script and all runtime + dev
+dependencies.
+
+## Configuration
+
+Configuration is managed with `pydantic-settings`. Copy `.env.example` to
+`.env` and adjust values; environment variables override the dotenv file.
+
+| variable              | default | description                    |
+| --------------------- | ------- | ------------------------------ |
+| `KB_DATA_DIR`         | `./data`| root of the data tree          |
+| `KB_LOG_LEVEL`        | `INFO`  | log level                      |
+| `KB_DATABASE_URL`     | —       | PostgreSQL URL (future)        |
+| `KB_TEST_DATABASE_URL`| —       | PostgreSQL test URL (future)   |
+
+`Settings` is environment-driven (`KB_` prefix) and available package-wide via
+`get_settings()`.
+
+## Logging
+
+Structured logging is provided through `loguru`, configured once at entry
+points:
+
+```python
+from knowledge_base.logging import configure_logging
+
+configure_logging("INFO")   # default: colorized, key=value records on stderr
+```
+
+## Command-line interface
+
+```powershell
+knowledge-base --version          # installed version
+knowledge-base env                # resolved configuration
+knowledge-base env --as-json      # configuration as JSON
+knowledge-base glob "**/*.pdf"    # list files under KB_DATA_DIR
+knowledge-base normalize docs/sample.txt
+```
+
+`python -m knowledge_base` is equivalent to `knowledge-base`. `env` prints the
+runtime configuration; `normalize` runs the normalization pipeline on a
+plain-text file and writes a report under `data/processed/normalized/`.
 
 ## Using the normalization pipeline
 
@@ -79,13 +122,23 @@ mypy src                     # type checking
 ```
 src/knowledge_base/
 ├── __init__.py
-└── normalization/           # implemented
-    ├── models.py            # NormalizationConfig / Result / Report
-    ├── normalize.py         # normalize_text()
-    └── report.py            # JSON + Markdown reports
+├── config.py               # pydantic-settings configuration (KB_* env)
+├── logging.py              # loguru structured logging
+├── __main__.py             # python -m knowledge_base entry
+├── core/
+│   └── hashing.py          # SHA-256 source/content hashing
+├── cli/
+│   ├── __init__.py         # argparse CLI (knowledge-base script)
+│   └── commands.py         # command implementations
+└── normalization/          # implemented
+    ├── models.py           # NormalizationConfig / Result / Report
+    ├── normalize.py        # normalize_text()
+    └── report.py           # JSON + Markdown reports
 docs/
 └── architecture.md          # full architecture + milestones
 tests/
+├── conftest.py
+├── test_config.py           # config + CLI tests
 └── test_normalization.py    # proves original text is never altered
 ```
 
