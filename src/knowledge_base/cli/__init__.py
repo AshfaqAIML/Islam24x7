@@ -343,6 +343,42 @@ def _build_parser() -> argparse.ArgumentParser:
     search.add_argument("--limit", type=int, default=20, help="max results (default 20)")
     search.add_argument("--json", action="store_true", help="print results as JSON")
 
+    similar = sub.add_parser(
+        "similar",
+        help="Semantic (vector) search over embedded chunks",
+    )
+    similar.add_argument("query", help="natural-language query to embed and match")
+    similar.add_argument(
+        "--provider",
+        default=None,
+        help="provider name: dummy or pkg.module:ClassName (default: settings)",
+    )
+    similar.add_argument(
+        "--model", default=None, help="embedding model name (default: settings)"
+    )
+    similar.add_argument(
+        "--model-version",
+        default=None,
+        help="embedding model version; omit for latest (default: settings)",
+    )
+    similar.add_argument(
+        "--category", help="category code (e.g. fiqh, tafsir)"
+    )
+    similar.add_argument("--book", dest="source", help="source sha256 prefix")
+    similar.add_argument("--language", choices=["ar", "ur", "en"], default=None,
+                         help="restrict by chunk language")
+    similar.add_argument(
+        "--source-type",
+        choices=["pdf", "epub", "docx", "txt", "html", "json"],
+        default=None,
+        help="restrict by source file format",
+    )
+    similar.add_argument("--author", help="author name substring")
+    similar.add_argument("--min-score", type=float, default=None,
+                         help="drop hits below this cosine similarity")
+    similar.add_argument("--limit", type=int, default=20, help="max results (default 20)")
+    similar.add_argument("--json", action="store_true", help="print results as JSON")
+
     return parser
 
 
@@ -470,6 +506,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             category=args.category,
             source=args.source,
             author=args.author,
+            limit=args.limit,
+            as_json=args.json,
+        )
+    elif command == "similar":
+        return commands.cmd_similar(
+            args.query,
+            provider_name=args.provider,
+            model=args.model,
+            model_version=args.model_version,
+            category=args.category,
+            source=args.source,
+            language=args.language,
+            source_type=args.source_type,
+            author=args.author,
+            min_score=args.min_score,
             limit=args.limit,
             as_json=args.json,
         )

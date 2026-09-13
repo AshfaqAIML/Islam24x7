@@ -89,3 +89,35 @@ GROUP BY m.name, m.version, m.dimensions;"
 Tests: `uv run pytest tests/test_embedding.py -q` (provider determinism and
 similarity, content-hash reuse, idempotency, model versioning, retries/rate
 limits, failure handling).
+
+## Vector (semantic) search
+
+`knowledge_base.search.similar` embeds a query with the *same* provider used
+at index time and returns the nearest stored chunk vectors by cosine distance,
+ranked by similarity score (`1 - cosine distance`). The query embedding must
+use the same model family as the stored vectors; results are scoped to one
+`embedding_models` row (name, or name + version — omit the version for the
+latest registered).
+
+```pwsh
+knowledge-base similar "importance of patience"                       # top 20
+knowledge-base similar "sabr and perseverance" --min-score 0.3        # threshold
+knowledge-base similar "sabr and perseverance" --category tafsir
+knowledge-base similar "hadith narrators" --book 8e3ba214de62 --language ar
+knowledge-base similar "fasting" --source-type pdf --author "ibn"
+knowledge-base similar "patience" --limit 5 --json                    # machine-readable
+```
+
+Every `VectorHit` keeps full provenance so vector search never loses
+traceability: chunk id + content id, book id/title, chapter id/title, section
+id/title, page number, source-file id + full SHA-256, source type (format),
+language, and the matched text.
+
+Filters (all optional, combinable): `category` (category code), `book`
+(source SHA-256 prefix), `language` (`ar`/`ur`/`en`), `source_type` (file
+format), `author` (substring), and `min_score` (drop hits below a similarity
+threshold). Results default to all embedded chunks of the model; a model or
+provider mismatch raises a dimension error rather than returning junk.
+
+Tests: `uv run pytest tests/test_vector_search.py -q` (relevance ranking,
+provenance integrity, model/version scoping, every filter, empty queries).

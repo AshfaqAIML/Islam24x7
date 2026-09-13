@@ -391,6 +391,104 @@ def cmd_search(
     return 0
 
 
+def cmd_similar(
+    query: str,
+    *,
+    provider_name: str | None = None,
+    model: str | None = None,
+    model_version: str | None = None,
+    category: str | None = None,
+    source: str | None = None,
+    language: str | None = None,
+    source_type: str | None = None,
+    author: str | None = None,
+    min_score: float | None = None,
+    limit: int = 20,
+    as_json: bool = False,
+) -> int:
+    """Run a semantic (vector) search and render the hits with provenance."""
+    from dataclasses import asdict, replace
+
+    from knowledge_base.database import create_app_engine, make_session_factory, session_scope
+    from knowledge_base.pipeline.embed.config import EmbedConfig
+    from knowledge_base.pipeline.embed.provider import (
+        EmbeddingProviderUnavailable,
+        build_provider,
+    )
+    from knowledge_base.search import similar
+
+    settings = _settings()
+    config = EmbedConfig.from_settings(settings)
+    overrides: dict[str, Any] = {}
+    if provider_name:
+        overrides["provider_name"] = provider_name
+    if model:
+        overrides["model_name"] = model
+    if model_version:
+        overrides["model_version"] = model_version
+    if overrides:
+        config = replace(config, **overrides)
+
+    try:
+        provider = build_provider(config.provider_name, config)
+    except EmbeddingProviderUnavailable as exc:
+        print(f"embedding provider unavailable: {exc}", file=sys.stderr)
+        return 3
+
+    engine = create_app_engine(settings.database_url)
+    factory = make_session_factory(engine)
+    with session_scope(factory) as session:
+        try:
+            hits = similar(
+                session,
+                query,
+                provider,
+                model_name=config.model_name,
+                model_version=config.model_version,
+                limit=limit,
+                category=category,
+                source=source,
+                language=language,
+                source_type=source_type,
+                author=author,
+                min_score=min_score,
+            )
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+
+    if as_json:
+        print(json.dumps([asdict(h) for h in hits], ensure_ascii=False, indent=2))
+    else:
+        if not hits:
+            print("No results found.")
+            return 0
+        for idx, hit in enumerate(hits, start=1):
+            print(f"[{idx}] similarity={hit.score:.4f}  {hit.book}")
+            if hit.author:
+                print(f"    Author: {hit.author}")
+            if hit.category:
+                print(f"    Category: {hit.category}")
+            if hit.chapter:
+                print(f"    Chapter: {hit.chapter}")
+            if hit.section:
+                print(f"    Section: {hit.section}")
+            if hit.page:
+                print(f"    Page: {hit.page}")
+            if hit.source:
+                print(f"    Source: {hit.source[:12]}")
+            if hit.source_type:
+                print(f"    Type: {hit.source_type}")
+            if hit.language:
+                print(f"    Language: {hit.language}")
+            print(f"    Chunk: {hit.chunk_id}")
+            text = hit.text.strip().replace("\n", " ")
+            if len(text) > 140:
+                text = text[:137] + "..."
+            print(f"    Text: {text}")
+    return 0
+
+
 def cmd_ingest(source_dir: Path, category: str, *, dry_run: bool = False) -> int:
     """Register every source file under ``source_dir`` into the KB database."""
     from collections import Counter
@@ -1094,5 +1192,6 @@ __all__ = [
     "cmd_index_run",
     "cmd_embed_run",
     "cmd_search",
+    "cmd_similar",
     "cmd_version",
 ]
