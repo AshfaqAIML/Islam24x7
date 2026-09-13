@@ -121,3 +121,46 @@ provider mismatch raises a dimension error rather than returning junk.
 
 Tests: `uv run pytest tests/test_vector_search.py -q` (relevance ranking,
 provenance integrity, model/version scoping, every filter, empty queries).
+
+## Hybrid search (keyword + semantic)
+
+`knowledge_base.search.hybrid_search` runs **both** retrievers for every
+query and fuses them into one result set:
+
+```
+query → keyword candidates (search_documents tsvector)
+         + semantic candidates (embeddings cosine)
+       → normalized weighted score per chunk   (ranking)
+       → deduplication by chunk                (fusion)
+       → source-rich HybridHit results
+```
+
+- **Configurable weighting** — `weight_fts` / `weight_vector` (both default
+  0.5). Set one to 0 to disable a path: `weight_vector=0` for keyword-only,
+  `weight_fts=0` for semantic-only.
+- **Never semantic-only by design** — when the embedding provider is
+  unavailable the keyword path still runs (keyboard-only fallback); keyword
+  retrieval never depends on embeddings.
+- **Ranking** — keyword ranks are normalised by the pool maximum, so both
+  contributions live in the same `[0,1]` space: score = `w_fts·norm_rank +
+  w_vec·similarity`. Each hit reports its raw `fts_score`, `vector_score`,
+  weights, and the `retrievers` that found it.
+- **Semantic recall** — passages that share little vocabulary (e.g. a query
+  about "importance of patience" surfacing a passage on *sabr, perseverance,
+  self-control, forgiveness*) are recovered by the semantic path even though
+  keyword matching cannot see them, while exact keyword matches still rank
+  via the keyword path.
+- **Provenance** — every `HybridHit` carries book/chapter/section/page,
+  source SHA-256 + file id + format, language, content id and chunk id, and
+  the original text.
+
+```pwsh
+knowledge-base hybrid "importance of patience"                 # fused top 20
+knowledge-base hybrid "prayer" --weight-vector 0               # keyword-only
+knowledge-base hybrid "fasting" --weight-fts 0.3 --weight-vector 0.7
+knowledge-base hybrid "sabr" --category fiqh --language en --json
+```
+
+Tests: `uv run pytest tests/test_hybrid.py -q` (Islamic evaluation queries:
+semantic recall without exact keywords, keyword-only degradation, weighting,
+deduplication of fused hits, provenance integrity).

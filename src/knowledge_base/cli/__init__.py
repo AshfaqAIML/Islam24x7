@@ -379,6 +379,52 @@ def _build_parser() -> argparse.ArgumentParser:
     similar.add_argument("--limit", type=int, default=20, help="max results (default 20)")
     similar.add_argument("--json", action="store_true", help="print results as JSON")
 
+    hybrid = sub.add_parser(
+        "hybrid",
+        help="Hybrid search: keyword + semantic retrieval fused",
+    )
+    hybrid.add_argument("query", help="natural-language query")
+    hybrid.add_argument(
+        "--weight-fts",
+        type=float,
+        default=0.5,
+        help="keyword path weight (default 0.5)",
+    )
+    hybrid.add_argument(
+        "--weight-vector",
+        type=float,
+        default=0.5,
+        help="semantic path weight; 0 = keyword-only (default 0.5)",
+    )
+    hybrid.add_argument(
+        "--provider",
+        default=None,
+        help="provider name: dummy or pkg.module:ClassName (default: settings)",
+    )
+    hybrid.add_argument(
+        "--model", default=None, help="embedding model name (default: settings)"
+    )
+    hybrid.add_argument(
+        "--model-version",
+        default=None,
+        help="embedding model version; omit for latest (default: settings)",
+    )
+    hybrid.add_argument("--category", help="category code (e.g. fiqh, tafsir)")
+    hybrid.add_argument("--book", dest="source", help="source sha256 prefix")
+    hybrid.add_argument("--language", choices=["ar", "ur", "en"], default=None,
+                        help="restrict by chunk language")
+    hybrid.add_argument(
+        "--source-type",
+        choices=["pdf", "epub", "docx", "txt", "html", "json"],
+        default=None,
+        help="restrict by source file format",
+    )
+    hybrid.add_argument("--author", help="author name substring")
+    hybrid.add_argument("--min-score", type=float, default=None,
+                        help="drop hits below this fused score")
+    hybrid.add_argument("--limit", type=int, default=20, help="max results (default 20)")
+    hybrid.add_argument("--json", action="store_true", help="print results as JSON")
+
     return parser
 
 
@@ -512,6 +558,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     elif command == "similar":
         return commands.cmd_similar(
             args.query,
+            provider_name=args.provider,
+            model=args.model,
+            model_version=args.model_version,
+            category=args.category,
+            source=args.source,
+            language=args.language,
+            source_type=args.source_type,
+            author=args.author,
+            min_score=args.min_score,
+            limit=args.limit,
+            as_json=args.json,
+        )
+    elif command == "hybrid":
+        return commands.cmd_hybrid(
+            args.query,
+            weight_fts=args.weight_fts,
+            weight_vector=args.weight_vector,
             provider_name=args.provider,
             model=args.model,
             model_version=args.model_version,
