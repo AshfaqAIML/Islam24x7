@@ -2,8 +2,8 @@
 
 A small, high-level CLI for operating the whole system: import files,
 inspect them, run the processing pipeline, ask source-grounded questions,
-search, embed, reindex, validate, retry, export, serve the API, and check
-status/stats.
+search, embed, reindex, validate, retry, export, serve the API, seed Quran
+and hadith datasets, and check status/stats.
 
 Exit codes:
     0  success
@@ -185,6 +185,19 @@ def _build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--port", type=int, default=8000, help="bind port (default 8000)")
     serve.add_argument("--reload", action="store_true", help="auto-reload on source changes")
 
+    # seed ------------------------------------------------------------------
+    seed_quran = sub.add_parser(
+        "seed-quran",
+        help="Load a curated Quran dataset (JSON) into the knowledge base",
+    )
+    seed_quran.add_argument("--file", required=True, type=Path, help="path to the dataset JSON")
+
+    seed_hadith = sub.add_parser(
+        "seed-hadith",
+        help="Load a curated hadith dataset (JSON) into the knowledge base",
+    )
+    seed_hadith.add_argument("--file", required=True, type=Path, help="path to the dataset JSON")
+
     # embed -----------------------------------------------------------------
     embed = sub.add_parser("embed", help="Generate chunk embeddings for vector search")
     embed.add_argument("--sha256", help="embed one source by sha256 prefix")
@@ -364,6 +377,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return commands.cmd_status(as_json=args.as_json)
         if cmd == "serve":
             return commands.cmd_serve(host=args.host, port=args.port, reload=args.reload)
+        if cmd == "seed-quran":
+            return commands.cmd_seed_quran(file=args.file, as_json=args.as_json)
+        if cmd == "seed-hadith":
+            return commands.cmd_seed_hadith(file=args.file, as_json=args.as_json)
         if cmd == "retry":
             return commands.cmd_retry(
                 sha256=args.sha256,

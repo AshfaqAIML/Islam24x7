@@ -1057,6 +1057,99 @@ def cmd_serve(*, host: str = "127.0.0.1", port: int = 8000, reload: bool = False
 
 
 # ---------------------------------------------------------------------------
+# seed
+# ---------------------------------------------------------------------------
+
+
+def _seed_dataset(session: Any, file_path: Path, kind: str) -> tuple[Any, Any]:
+    """Register a validated dataset file and return (source_file, report)."""
+    import json
+
+    from pydantic import ValidationError
+    from sqlalchemy import select
+
+    from knowledge_base.core.hashing import sha256_file
+    from knowledge_base.database.enums import SourceFormat, SourceStatus
+    from knowledge_base.database.models.sources import SourceFile
+    from knowledge_base.pipeline.seed import HadithDataset, QuranDataset
+    from knowledge_base.pipeline.seed.hadith import seed_hadith
+    from knowledge_base.pipeline.seed.quran import seed_quran
+
+    if not file_path.exists():
+        raise FileNotFoundError(f"dataset not found: {file_path}")
+
+    payload = json.loads(file_path.read_text(encoding="utf-8"))
+    model: type[QuranDataset] | type[HadithDataset]
+    if kind == "quran":
+        model = QuranDataset
+    elif kind == "hadith":
+        model = HadithDataset
+    else:  # pragma: no cover - guarded by argparse choices
+        raise ValueError(f"unknown seed kind: {kind}")
+
+    try:
+        dataset = model.model_validate(payload)
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        loc = ".".join(str(p) for p in first["loc"])
+        raise ValueError(f"invalid {kind} dataset at {loc}: {first['msg']}") from None
+
+    digest = sha256_file(file_path)
+    source_file = session.scalar(select(SourceFile).where(SourceFile.sha256 == digest))
+    if source_file is None:
+        source_file = SourceFile(
+            sha256=digest,
+            file_path=str(file_path),
+            format=SourceFormat.JSON,
+            size_bytes=file_path.stat().st_size,
+            status=SourceStatus.REGISTERED,
+        )
+        session.add(source_file)
+        session.flush()
+
+    if isinstance(dataset, QuranDataset):
+        report = seed_quran(session, source_file, dataset)
+    else:
+        report = seed_hadith(session, source_file, dataset)
+    return source_file, report
+
+
+def _seed_cli(file: Path, kind: str, as_json: bool) -> int:
+    """Run one seed command with clean error handling."""
+    from knowledge_base.database import create_app_engine, make_session_factory, session_scope
+    from knowledge_base.pipeline.seed.report import SeedConflictError
+
+    settings = _settings()
+    engine = create_app_engine(settings.database_url)
+    factory = make_session_factory(engine)
+
+    try:
+        with session_scope(factory) as session:
+            source_file, report = _seed_dataset(session, file, kind)
+    except (FileNotFoundError, ValueError, SeedConflictError) as exc:
+        _err(str(exc))
+        return 1
+
+    if as_json:
+        return _dump_json({**report.to_dict(), "source": source_file.sha256[:12]})
+    _info(
+        f"{green('seeded')} {kind}: created={report.created} skipped={report.skipped} "
+        f"source={source_file.sha256[:12]}"
+    )
+    return 0
+
+
+def cmd_seed_quran(*, file: Path, as_json: bool = False) -> int:
+    """Seed the Quran domain from a curated JSON dataset file."""
+    return _seed_cli(file, "quran", as_json)
+
+
+def cmd_seed_hadith(*, file: Path, as_json: bool = False) -> int:
+    """Seed the hadith domain from a curated JSON dataset file."""
+    return _seed_cli(file, "hadith", as_json)
+
+
+# ---------------------------------------------------------------------------
 # internal helpers
 # ---------------------------------------------------------------------------
 
@@ -1097,6 +1190,8 @@ __all__ = [
     "cmd_reindex",
     "cmd_retry",
     "cmd_search",
+    "cmd_seed_hadith",
+    "cmd_seed_quran",
     "cmd_serve",
     "cmd_status",
     "cmd_stats",
