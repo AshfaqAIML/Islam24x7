@@ -13,9 +13,15 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from knowledge_base.database.enums import BlockType, ChapterKind, ContentStatus, SourceFormat
+from knowledge_base.database.enums import (
+    BlockType,
+    ChapterKind,
+    ContentStatus,
+    JobType,
+    SourceFormat,
+)
 from knowledge_base.database.models.books import Book
-from knowledge_base.database.models.sources import SourceFile
+from knowledge_base.database.models.sources import ProcessingJob, SourceFile
 from knowledge_base.database.models.structure import (
     Chapter,
     ContentBlock,
@@ -39,9 +45,7 @@ from knowledge_base.pipeline.structure.processor import (
 CONFIG = DEFAULT_STRUCTURE_CONFIG
 
 
-def _write_extract(
-    data_dir: Path, sha256: str, pages: dict[int, str]
-) -> None:
+def _write_extract(data_dir: Path, sha256: str, pages: dict[int, str]) -> None:
     """Write extract-style output (pages only, no index) for a sha."""
     pages_dir = data_dir / "processed" / "extract" / sha256 / "pages"
     pages_dir.mkdir(parents=True, exist_ok=True)
@@ -49,9 +53,7 @@ def _write_extract(
         (pages_dir / f"{page_no:04d}.txt").write_text(text, encoding="utf-8")
 
 
-def _write_extract_with_index(
-    data_dir: Path, sha256: str, pages: dict[int, str | None]
-) -> None:
+def _write_extract_with_index(data_dir: Path, sha256: str, pages: dict[int, str | None]) -> None:
     """Write extract output with an index declaring blank pages (None)."""
     root = data_dir / "processed" / "extract" / sha256
     pages_dir = root / "pages"
@@ -161,7 +163,7 @@ EN_PAGES = {
     3: "The Introduction\n\nThis is the introduction text for the front matter.\n3",
     4: "Chapter 1\nSome opening prose of chapter one.\n4",
     5: "Chapter 1\n1.1 First Section\nParagraph in section one.\n"
-       "1.1.1 A subsection\nParagraph in the subsection.\n5",
+    "1.1.1 A subsection\nParagraph in the subsection.\n5",
     6: "Chapter 2\nProse for chapter two.\n1.1 Second Section\nMore prose.\n6",
     7: "Text with a note.\n(1) This is a footnote.\n7",
     8: "References\nSmith, J. (2020). Some citation.\nDoe, A. A book.\n8",
@@ -179,7 +181,9 @@ def test_detect_english_book(db: Session, tmp_path: Path) -> None:
     assert result.toc_pages == [2]
     assert result.front_matter_pages == [1, 3]
     assert result.chapters_by_kind == {
-        "chapter": 3, "table_of_contents": 1, "front_matter": 1,
+        "chapter": 3,
+        "table_of_contents": 1,
+        "front_matter": 1,
     }
     assert result.section_count == 2
     assert result.subsection_count == 1
@@ -210,18 +214,14 @@ def test_detect_english_book(db: Session, tmp_path: Path) -> None:
     assert len(sections) == 2
     assert {s.title for s in sections} == {"First Section", "Second Section"}
 
-    subsections = db.scalars(
-        select(Subsection).where(Subsection.book_id == book.id)
-    ).all()
+    subsections = db.scalars(select(Subsection).where(Subsection.book_id == book.id)).all()
     assert [s.title for s in subsections] == ["A subsection"]
 
     pages = db.scalars(select(Page).where(Page.book_id == book.id)).all()
     assert len(pages) == 8
     assert all(p.has_text for p in pages)
 
-    paragraphs = db.scalars(
-        select(Paragraph).where(Paragraph.book_id == book.id)
-    ).all()
+    paragraphs = db.scalars(select(Paragraph).where(Paragraph.book_id == book.id)).all()
     assert len(paragraphs) == 6
     assert all(p.text.strip() for p in paragraphs)
 
@@ -233,9 +233,7 @@ def test_detect_english_book(db: Session, tmp_path: Path) -> None:
         )
     ).all()
     detail = next(
-        block
-        for block in sub_block
-        if "Paragraph in the subsection" in block.original_text
+        block for block in sub_block if "Paragraph in the subsection" in block.original_text
     )
     assert detail.subsection is not None
     assert detail.subsection.title == "A subsection"
@@ -243,9 +241,7 @@ def test_detect_english_book(db: Session, tmp_path: Path) -> None:
     assert detail.chapter.title == "Chapter 1"
 
     # footnote and reference blocks are present with status validated
-    blocks = db.scalars(
-        select(ContentBlock).where(ContentBlock.book_id == book.id)
-    ).all()
+    blocks = db.scalars(select(ContentBlock).where(ContentBlock.book_id == book.id)).all()
     footnote = next(b for b in blocks if b.block_type == BlockType.FOOTNOTE)
     assert "footnote" in footnote.original_text.lower()
     ref = next(b for b in blocks if b.block_type == BlockType.REFERENCE)
@@ -266,12 +262,12 @@ def test_detect_english_book_idempotent(db: Session, tmp_path: Path) -> None:
 
     assert second.error is None
     assert (first.page_count, first.paragraph_count, first.block_count) == (
-        second.page_count, second.paragraph_count, second.block_count,
+        second.page_count,
+        second.paragraph_count,
+        second.block_count,
     )
     assert first.flagged_count == second.flagged_count
-    chapters = db.scalars(
-        select(Chapter).where(Chapter.book_id == book.id)
-    ).all()
+    chapters = db.scalars(select(Chapter).where(Chapter.book_id == book.id)).all()
     assert len(chapters) == 5
     assert _count(db, Section) == 2
     assert _count(db, Subsection) == 1
@@ -300,7 +296,9 @@ def test_detect_arabic_book(db: Session, tmp_path: Path) -> None:
     assert result.toc_pages == []
     assert result.front_matter_pages == [1]
     assert result.chapters_by_kind == {
-        "chapter": 1, "appendix": 1, "front_matter": 1,
+        "chapter": 1,
+        "appendix": 1,
+        "front_matter": 1,
     }
     assert result.section_count == 1
     assert result.subsection_count == 1
@@ -312,23 +310,16 @@ def test_detect_arabic_book(db: Session, tmp_path: Path) -> None:
     ).all()
     assert [c.title for c in chapters] == ["(front matter)", "الباب الأول", "الملحق"]
 
-    section = db.scalars(
-        select(Section).where(Section.book_id == book.id)
-    ).one()
+    section = db.scalars(select(Section).where(Section.book_id == book.id)).one()
     assert section.title == "الفصل الأول"
-    subsection = db.scalars(
-        select(Subsection).where(Subsection.book_id == book.id)
-    ).one()
+    subsection = db.scalars(select(Subsection).where(Subsection.book_id == book.id)).one()
     assert subsection.title == "المسألة الأولى"
 
-    blocks = db.scalars(
-        select(ContentBlock).where(ContentBlock.book_id == book.id)
-    ).all()
+    blocks = db.scalars(select(ContentBlock).where(ContentBlock.book_id == book.id)).all()
     footnote = next(b for b in blocks if b.block_type == BlockType.FOOTNOTE)
     assert "حاشية" in footnote.original_text
     detail = next(
-        b for b in blocks
-        if b.block_type == BlockType.PARAGRAPH and "المسألة" in b.original_text
+        b for b in blocks if b.block_type == BlockType.PARAGRAPH and "المسألة" in b.original_text
     )
     assert detail.subsection is not None
     assert detail.subsection.title == "المسألة الأولى"
@@ -374,7 +365,8 @@ def test_blank_pages_from_index(db: Session, tmp_path: Path) -> None:
     sha = "ee" * 32
     root = tmp_path / "processed" / "extract" / sha
     _write_extract_with_index(
-        tmp_path, sha,
+        tmp_path,
+        sha,
         {1: "Chapter 1\nOpening text.\n", 2: None, 3: "Closing text.\n"},
     )
     pages = load_extract_pages(root)
@@ -403,3 +395,59 @@ def test_load_extract_pages_fallback(tmp_path: Path) -> None:
     (pages_dir / "0001.txt").write_text("one", encoding="utf-8")
     (pages_dir / "0003.txt").write_text("three", encoding="utf-8")
     assert load_extract_pages(tmp_path) == {1: "one", 3: "three"}
+
+
+# ----------------------------------------------------------------- error paths
+
+
+def test_detect_structure_missing_extract_fails(db: Session, tmp_path: Path) -> None:
+    source = SourceFile(
+        sha256="ff" * 32,
+        file_path=f"books/{'ff' * 32}.pdf",
+        format=SourceFormat.PDF,
+    )
+    db.add(source)
+    db.flush()
+    book = Book(source_file_id=source.id, title="No Extraction")
+    db.add(book)
+    db.flush()
+
+    result = detect_structure(book, session=db, data_dir=tmp_path)
+    db.flush()
+    assert result.error and "no extraction output" in result.error
+    assert result.page_count == 0
+    job = db.scalar(select(ProcessingJob).where(ProcessingJob.job_type == JobType.STRUCTURE))
+    assert job is not None
+    assert job.status.value == "failed"
+    assert db.scalars(select(Chapter)).all() == []
+
+
+def test_structure_render_report_text() -> None:
+    from knowledge_base.pipeline.structure.processor import (
+        StructureResult,
+        render_report_text,
+    )
+
+    result = StructureResult(
+        sha256="aa" * 32,
+        source_file_id="4102c698-edd8-4e6d-9004-abcdef000001",
+        book_id="bb" * 16,
+        error="boom",
+        page_count=3,
+        pages_with_text=2,
+        toc_pages=[1],
+        chapters_by_kind={"chapter": 1, "table_of_contents": 1},
+        paragraph_count=2,
+        block_count=4,
+        flagged_count=1,
+        blocks_by_type={"paragraph": 2, "heading": 1, "toc_entry": 1},
+        flagged_blocks=[{"page": 1, "note": "uncertain", "text": "Possible Heading"}],
+    )
+    text = render_report_text(result)
+    assert "Pages: 2/3 with text" in text
+    assert "Table of contents: pages [1]" in text
+    assert "Chapters: 1 sections=0 subsections=0" in text
+    assert "Paragraphs: 2 blocks=4 flagged=1" in text
+    assert "Blocks by type: paragraph=2, heading=1, toc_entry=1" in text
+    assert "p.1 [uncertain] Possible Heading" in text
+    assert "Error: boom" in text

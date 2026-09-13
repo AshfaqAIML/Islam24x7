@@ -74,9 +74,7 @@ def test_assess_quality() -> None:
     )
     assert ok == OcrStatus.OK and notes == []
 
-    status, notes = assess_quality(
-        OcrSnippet("", 95.0, ("ar",)), config
-    )
+    status, notes = assess_quality(OcrSnippet("", 95.0, ("ar",)), config)
     assert status == OcrStatus.REVIEW
     assert "no_text" in notes
 
@@ -85,9 +83,7 @@ def test_assess_quality() -> None:
     )
     assert status == OcrStatus.REVIEW
 
-    status, notes = assess_quality(
-        OcrSnippet("????? ~~~~ ~~~!!!!", None, ("ar",)), config
-    )
+    status, notes = assess_quality(OcrSnippet("????? ~~~~ ~~~!!!!", None, ("ar",)), config)
     assert status == OcrStatus.REVIEW
     assert any("low_alpha" in n for n in notes)
 
@@ -295,9 +291,12 @@ def test_ocr_force_reruns(db: Session, tmp_path: Path) -> None:
 
     assert result.pages_ocr == 1
     assert len(db.scalars(select(OcrPage)).all()) == 1
-    assert db.scalar(select(ProcessingJob).where(ProcessingJob.job_type == JobType.OCR)).manifest[
-        "pages_ocr"
-    ] == 1
+    assert (
+        db.scalar(select(ProcessingJob).where(ProcessingJob.job_type == JobType.OCR)).manifest[
+            "pages_ocr"
+        ]
+        == 1
+    )
 
 
 def test_build_engine_dummy_and_unknown() -> None:
@@ -315,3 +314,68 @@ def test_build_engine_dummy_and_unknown() -> None:
 def test_density_chars() -> None:
     assert density_chars("ab c d") == 4
     assert density_chars("") == 0
+
+
+def test_dummy_engine_by_page_mapping(tmp_path: Path) -> None:
+    engine = DummyEngine(defaults=("fallback text", 1.0), by_page={3: ("third page text", 80.0)})
+    one = engine.ocr_image(tmp_path / "0003.png", ["ar"])
+    assert one.text == "third page text"
+    assert one.confidence == 80.0
+    assert one.languages == ("ar",)
+    two = engine.ocr_image(tmp_path / "0009.png", ["ar"])
+    assert two.text == "fallback text"
+    assert two.confidence == 1.0
+
+
+def test_build_engine_custom_class_path() -> None:
+    engine = build_engine("knowledge_base.pipeline.ocr.engines:DummyEngine", OcrConfig())
+    assert isinstance(engine, DummyEngine)
+
+
+def test_build_engine_custom_missing_module() -> None:
+    from knowledge_base.pipeline.ocr.engines import OcrEngineUnavailable
+
+    with pytest.raises(OcrEngineUnavailable):
+        build_engine("no_such_module_xyz:DummyEngine", OcrConfig())
+
+
+def test_build_engine_custom_attr_not_class() -> None:
+    from knowledge_base.pipeline.ocr.engines import OcrEngineUnavailable
+
+    with pytest.raises(OcrEngineUnavailable):
+        build_engine("knowledge_base.pipeline.ocr.engines:build_engine", OcrConfig())
+
+
+def test_tesseract_missing_dependency_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+
+    from knowledge_base.pipeline.ocr.engines import OcrEngineUnavailable, TesseractEngine
+
+    monkeypatch.setitem(sys.modules, "pytesseract", None)
+    with pytest.raises(OcrEngineUnavailable):
+        TesseractEngine(OcrConfig())
+
+
+def test_easyocr_missing_dependency_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib.metadata as metadata
+
+    from knowledge_base.pipeline.ocr.engines import EasyOcrEngine, OcrEngineUnavailable
+
+    def missing(name: str) -> str:
+        raise metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(metadata, "version", missing)
+    with pytest.raises(OcrEngineUnavailable):
+        EasyOcrEngine(OcrConfig())
+
+
+def test_ocr_snippet_languages_are_tupled() -> None:
+    from knowledge_base.pipeline.ocr.engines import OcrSnippet
+
+    snippet = OcrSnippet("text", 90.0, ["ar", "ur"])
+    assert snippet.languages == ("ar", "ur")
+    assert isinstance(snippet.languages, tuple)

@@ -31,6 +31,7 @@ from knowledge_base.pipeline.metadata.processor import (
     merge_candidates,
     overall_confidence,
     publish_metadata,
+    render_report_text,
 )
 
 AR_TITLE = "فقه الحنفي"
@@ -214,7 +215,11 @@ def test_merge_ranks_by_status_then_confidence(db: Session, tmp_path: Path) -> N
     assert best[MetadataField.TITLE] is low  # explicit approval overrides confidence
 
     rejected_page = _row(
-        db, source, MetadataField.TITLE, "Rejected", confidence=MetadataConfidence.HIGH,
+        db,
+        source,
+        MetadataField.TITLE,
+        "Rejected",
+        confidence=MetadataConfidence.HIGH,
         status=MetadataReviewStatus.REJECTED,
     )
     db.flush()
@@ -326,8 +331,13 @@ def test_review_approve_and_publish(db: Session, tmp_path: Path) -> None:
     apply_review(db, source, "author", approve=True, reviewer="tester")
     apply_review(db, source, "language", approve=True, reviewer="tester")
     _ = _row(
-        db, source, MetadataField.CATEGORY, "Fiqh", confidence=MetadataConfidence.HIGH,
-        source_=MetadataSource.USER_PROVIDED, uncertain=False,
+        db,
+        source,
+        MetadataField.CATEGORY,
+        "Fiqh",
+        confidence=MetadataConfidence.HIGH,
+        source_=MetadataSource.USER_PROVIDED,
+        uncertain=False,
         status=MetadataReviewStatus.APPROVED,
     )
     db.commit()
@@ -383,9 +393,188 @@ def test_review_corrects_value_via_cli(db: Session, tmp_path: Path) -> None:
     )
     assert error is None and target is not None
     db.commit()
-    best = merge_candidates(
-        db.scalars(select(MetadataCandidate)).all(), DEFAULT_METADATA_CONFIG
-    )
+    best = merge_candidates(db.scalars(select(MetadataCandidate)).all(), DEFAULT_METADATA_CONFIG)
     assert best[MetadataField.TITLE].value == "Corrected Title"
     assert best[MetadataField.TITLE].status == MetadataReviewStatus.APPROVED
     assert best[MetadataField.TITLE].source == MetadataSource.USER_PROVIDED
+
+
+def test_apply_review_unknown_field_returns_error(db: Session, tmp_path: Path) -> None:
+    pdf = _make_pdf(tmp_path, "Unknown-Field.pdf", pages=["text"])
+    source = _ingest(db, tmp_path, pdf)
+    target, error = apply_review(db, source, "bogus-field", approve=True)
+    assert target is None
+    assert error and "unknown metadata field" in error
+
+
+def test_apply_review_no_candidate_returns_error(db: Session, tmp_path: Path) -> None:
+    pdf = _make_pdf(tmp_path, "No-Publisher.pdf", pages=["plain text"])
+    source = _ingest(db, tmp_path, pdf)
+    extract_metadata(source, session=db, data_dir=tmp_path)
+    db.commit()
+    target, error = apply_review(db, source, "publisher", approve=True)
+    assert target is None
+    assert error and "no publisher candidate" in error
+
+
+def test_merge_ties_break_by_source_priority(db: Session, tmp_path: Path) -> None:
+    pdf = _make_pdf(tmp_path, "tie.pdf", pages=["x"])
+    source = _ingest(db, tmp_path, pdf)
+    low = _row(
+        db,
+        source,
+        MetadataField.TITLE,
+        "From Filename",
+        confidence=MetadataConfidence.MEDIUM,
+        source_=MetadataSource.FILENAME,
+    )
+    high = _row(
+        db,
+        source,
+        MetadataField.TITLE,
+        "From Pages",
+        confidence=MetadataConfidence.MEDIUM,
+        source_=MetadataSource.FIRST_PAGES,
+    )
+    db.flush()
+    best = merge_candidates([low, high], DEFAULT_METADATA_CONFIG)
+    assert best[MetadataField.TITLE] is high  # first_pages (2) outranks filename (1)
+
+    with_meta = _row(
+        db,
+        source,
+        MetadataField.TITLE,
+        "From PDF Meta",
+        confidence=MetadataConfidence.MEDIUM,
+        source_=MetadataSource.PDF_METADATA,
+    )
+    db.flush()
+    best = merge_candidates([low, high, with_meta], DEFAULT_METADATA_CONFIG)
+    assert best[MetadataField.TITLE] is with_meta  # pdf_metadata (4) wins the tie
+
+
+def test_overall_confidence_none_for_no_fields() -> None:
+    assert overall_confidence({}) is None
+
+
+def test_render_report_text_marks_uncertain_and_missing(db: Session, tmp_path: Path) -> None:
+    pdf = _make_pdf(tmp_path, "render.pdf", pages=["text"])
+    source = _ingest(db, tmp_path, pdf)
+    row = _row(
+        db,
+        source,
+        MetadataField.TITLE,
+        "Guessed Title",
+        confidence=MetadataConfidence.LOW,
+        uncertain=True,
+    )
+    text = render_report_text(
+        "render.pdf", {MetadataField.TITLE: row}, "low", [MetadataField.AUTHOR], "pdf is encrypted"
+    )
+    assert "Title: Guessed Title  [uncertain]" in text
+    assert "[conf=low src=first_pages status=pending uncertain]" in text
+    assert "Author: (not found)" in text
+    assert "Metadata confidence: low" in text
+    assert "Error: pdf is encrypted" in text
+
+
+def test_reextract_removes_stale_candidates(db: Session, tmp_path: Path) -> None:
+    pdf = _make_pdf(tmp_path, "Reconcile.pdf", pages=["text"])
+    source = _ingest(db, tmp_path, pdf)
+    extract_metadata(source, session=db, data_dir=tmp_path, user_items=[("title", "User Title")])
+    db.commit()
+    before = db.scalars(select(MetadataCandidate)).all()
+    assert any(
+        c.field == MetadataField.TITLE and c.source == MetadataSource.USER_PROVIDED for c in before
+    )
+
+    extract_metadata(source, session=db, data_dir=tmp_path)  # user input gone on re-run
+    db.commit()
+    after = db.scalars(select(MetadataCandidate)).all()
+    assert not any(
+        c.field == MetadataField.TITLE and c.source == MetadataSource.USER_PROVIDED for c in after
+    )
+
+
+def test_extract_metadata_missing_file_reports_error(db: Session, tmp_path: Path) -> None:
+    pdf = _make_pdf(tmp_path, "Gone.pdf", pages=["x"])
+    source = _ingest(db, tmp_path, pdf)
+    (tmp_path / source.file_path).unlink()
+    result = extract_metadata(source, session=db, data_dir=tmp_path)
+    db.commit()
+    assert result.error and "cannot open pdf" in result.error
+    job = db.scalar(
+        select(ProcessingJob).where(
+            ProcessingJob.source_file_id == source.id,
+            ProcessingJob.job_type == JobType.METADATA,
+        )
+    )
+    assert job is not None and job.status.value == "failed"
+
+
+def test_extract_metadata_encrypted_pdf_reports_error(db: Session, tmp_path: Path) -> None:
+    plain = _make_pdf(tmp_path, "Plain.pdf", pages=["hidden text"])
+    encrypted = tmp_path / "secret-enc.pdf"
+    doc = pymupdf.open(str(plain))
+    doc.save(
+        str(encrypted),
+        encryption=pymupdf.PDF_ENCRYPT_AES_256,  # type: ignore[attr-defined]
+        owner_pw="owner",
+        user_pw="user",
+    )
+    doc.close()
+    plain.unlink()
+    source = _ingest(db, tmp_path, encrypted)
+    result = extract_metadata(source, session=db, data_dir=tmp_path)
+    db.commit()
+    assert result.error == "pdf is encrypted"
+    assert db.scalar(select(Book)) is None  # nothing published for the encrypted pdf
+
+
+def test_publish_unparseable_year_appends_error(db: Session, tmp_path: Path) -> None:
+    pdf = _make_pdf(tmp_path, "Year-Book.pdf", meta={"title": "Year Book"}, pages=["text"])
+    source = _ingest(db, tmp_path, pdf)
+    extract_metadata(source, session=db, data_dir=tmp_path)
+    db.commit()
+    apply_review(db, source, "title", approve=True)
+    _ = _row(
+        db,
+        source,
+        MetadataField.PUBLICATION_YEAR,
+        "unknown",
+        confidence=MetadataConfidence.HIGH,
+        source_=MetadataSource.USER_PROVIDED,
+        uncertain=False,
+        status=MetadataReviewStatus.APPROVED,
+    )
+    db.commit()
+    result = publish_metadata(db, source)
+    db.commit()
+    assert any("publication_year" in error for error in result.errors)
+    assert result.book_id is not None  # catalog still materialized
+
+
+def test_publish_hijri_year_notes_edition(db: Session, tmp_path: Path) -> None:
+    pdf = _make_pdf(tmp_path, "Hijri-Book.pdf", meta={"title": "Hijri Book"}, pages=["text"])
+    source = _ingest(db, tmp_path, pdf)
+    extract_metadata(source, session=db, data_dir=tmp_path)
+    db.commit()
+    apply_review(db, source, "title", approve=True)
+    _ = _row(
+        db,
+        source,
+        MetadataField.PUBLICATION_YEAR,
+        "1392 (AH)",
+        confidence=MetadataConfidence.HIGH,
+        source_=MetadataSource.USER_PROVIDED,
+        uncertain=False,
+        status=MetadataReviewStatus.APPROVED,
+    )
+    db.commit()
+    result = publish_metadata(db, source)
+    db.commit()
+    assert not result.errors
+    edition = db.scalar(select(SourceEdition))
+    assert edition is not None
+    assert edition.publication_year == 1392
+    assert edition.notes and "(Hijri)" in edition.notes
