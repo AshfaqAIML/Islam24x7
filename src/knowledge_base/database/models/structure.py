@@ -10,11 +10,12 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, Index, Integer, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text, UniqueConstraint, Uuid
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from knowledge_base.database.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, make_enum
-from knowledge_base.database.enums import BlockType, ChapterKind, ContentStatus
+from knowledge_base.database.enums import BlockType, ChapterKind, ContentStatus, Language
 
 if TYPE_CHECKING:
     from knowledge_base.database.models.books import Book
@@ -233,16 +234,19 @@ class ContentBlock(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
 
 class ContentChunk(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    """A chunk of content with a stable, deterministic identifier.
+    """A structure-aware retrieval chunk with a stable, deterministic id.
 
-    ``chunk_id`` encodes source hash + page + sequence so re-running the
+    Chunks group consecutive paragraphs within one section (never splitting a
+    paragraph and never crossing a section/chapter boundary). ``chunk_id`` is
+    derived from source hash + last structure position so re-running the
     pipeline produces identical ids (no churn across incremental runs).
+    ``content_block_id`` is the *first* block in the chunk; every block id is
+    repeated in ``metadata_['block_ids']``.
     """
 
     __tablename__ = "content_chunks"
     __table_args__ = (
         UniqueConstraint("chunk_id", name="uq_content_chunks_chunk_id"),
-        UniqueConstraint("content_block_id", "sequence", name="uq_content_chunks_block_seq"),
         Index("ix_content_chunks_book_id", "book_id"),
     )
 
@@ -256,9 +260,22 @@ class ContentChunk(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     source_file_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("source_files.id"), nullable=False
     )
-    page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    chapter_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("chapters.id"), nullable=True
+    )
+    section_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("sections.id"), nullable=True
+    )
+    language: Mapped[Language] = mapped_column(make_enum(Language), nullable=False)
+    token_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    page_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    page_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
+    is_normalized: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    metadata_: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, default=dict
+    )
     status: Mapped[ContentStatus] = mapped_column(
         make_enum(ContentStatus), nullable=False, default=ContentStatus.PENDING
     )

@@ -237,6 +237,29 @@ def _build_parser() -> argparse.ArgumentParser:
         "--reviewer", default="cli", help="human identity recording this review"
     )
 
+    chunk = sub.add_parser(
+        "chunk",
+        help="Materialize structure-aware retrieval chunks for a published book",
+    )
+    chunk_sub = chunk.add_subparsers(dest="chunk_command", required=True)
+    chunk_run = chunk_sub.add_parser(
+        "run",
+        help="Chunk a published book's paragraphs (idempotent)",
+    )
+    chunk_run.add_argument("--sha256", help="chunk one book by source sha256 prefix")
+    chunk_run.add_argument(
+        "--all", dest="chunk_all", action="store_true", help="chunk all published books"
+    )
+    chunk_run.add_argument(
+        "--limit", type=int, default=None, help="cap the number of books with --all"
+    )
+    chunk_run.add_argument(
+        "--max-tokens", type=int, default=512, help="soft token budget per chunk"
+    )
+    chunk_run.add_argument(
+        "--overlap", type=int, default=64, help="overlap budget in tokens (whole paragraphs)"
+    )
+
     return parser
 
 
@@ -332,6 +355,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 note=args.note,
                 reviewer=args.reviewer,
             )
+    elif command == "chunk" and args.chunk_command == "run":
+        return commands.cmd_chunk_run(
+            args.sha256,
+            chunk_all_=args.chunk_all,
+            limit=args.limit,
+            max_tokens=args.max_tokens,
+            overlap_tokens=args.overlap,
+        )
     return 0
 
 

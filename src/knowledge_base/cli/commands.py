@@ -151,6 +151,56 @@ def cmd_normalize_run(
     return 0
 
 
+def cmd_chunk_run(
+    sha256: str | None,
+    *,
+    chunk_all_: bool = False,
+    limit: int | None = None,
+    max_tokens: int = 512,
+    overlap_tokens: int = 64,
+) -> int:
+    """Materialize structure-aware chunks for a book's paragraphs (idempotent)."""
+    from knowledge_base.database import create_app_engine, make_session_factory, session_scope
+    from knowledge_base.logging import logger
+    from knowledge_base.pipeline.chunk.config import ChunkConfig
+    from knowledge_base.pipeline.chunk.processor import chunk_all, chunk_book
+
+    settings = _settings()
+    engine = create_app_engine(settings.database_url)
+    factory = make_session_factory(engine)
+    config = ChunkConfig(max_tokens=max_tokens, overlap_tokens=overlap_tokens)
+    with session_scope(factory) as session:
+        if sha256:
+            book = _find_book(session, sha256)
+            if book is None:
+                print(f"No published book matching sha256 prefix {sha256!r}", file=sys.stderr)
+                return 1
+            results = [
+                chunk_book(book, session=session, data_dir=settings.data_dir, config=config)
+            ]
+        elif chunk_all_:
+            results = chunk_all(session, settings=settings, config=config, limit=limit)
+        else:
+            print("Use --sha256 <prefix> or --all", file=sys.stderr)
+            return 2
+
+    for result in results:
+        logger.info(
+            "chunk {} lang={} max_tokens={} overlap={} chunks={} paragraphs={} tokens={}",
+            result.sha256[:12], result.language.value, result.config.max_tokens,
+            result.config.overlap_tokens, result.chunk_count, result.paragraph_count,
+            result.token_total,
+        )
+        print(
+            f"{result.sha256[:12]:12s} lang={result.language.value:3s} "
+            f"max_tokens={result.config.max_tokens:<4d} overlap={result.config.overlap_tokens:<3d} "
+            f"chunks={result.chunk_count:<4d} paragraphs={result.paragraph_count:<4d} "
+            f"tokens={result.token_total:<5d} pages={result.page_start}..{result.page_end}  "
+            f"{result.error or result.report_path}"
+        )
+    return 0
+
+
 def cmd_ingest(source_dir: Path, category: str, *, dry_run: bool = False) -> int:
     """Register every source file under ``source_dir`` into the KB database."""
     from collections import Counter

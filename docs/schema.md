@@ -122,15 +122,23 @@ Migration `f7e2c9a1b3d4_add_structure_detection`.
 | `pages` | `UNIQUE (book_id, page_number)`; → `book`, `source_file`; `has_text` bool |
 | `paragraphs` | `UNIQUE (book_id, page_id, sequence)`; keeps original pre-normalization text |
 | `content_blocks` | typed element: `block_type` enum `kb_blocktype`, `sequence`, `original_text`, `status` enum `kb_contentstatus`, nullable `notes`; optional FKs → `page`/`chapter`/`section`/`subsection`; `UNIQUE (book_id, page_id, sequence)` |
-| `content_chunks` | `chunk_id` `UNIQUE` (stable: `sha256:page:seq`), `UNIQUE (content_block_id, sequence)`; `page_number` cached on the chunk |
+| `content_chunks` | `chunk_id` `UNIQUE` (stable: `sha256(chapter:section:page:index)`), `UNIQUE (content_block_id, sequence)`; groups ≥1 paragraph (`metadata_["block_ids"]`); `language`, `token_count`, `page_start`/`page_end`, `chapter_id`/`section_id`, `text` (normalized variant where available), `is_normalized`, `metadata_` JSONB |
 
 `chapters.kind` distinguishes real content from identified structural regions
 so body text is never mistaken for them in search; `block_type` now also
 includes `page_number`, `front_matter`, `toc_entry`, and `reference` beyond
 the prose/heading/footnote/verse/hadith types.
 
-`original_text` on blocks/chunks is guaranteed verbatim source text; the
-*search/normalized* variant lives only in `search_documents.body_text`.
+`original_text` on blocks is guaranteed verbatim source text; the
+*search/normalized* variant lives in `normalized_texts` and is what
+`content_chunks.text` carries when a normalized variant exists (with
+`is_normalized=true`), falling back to the original otherwise.
+
+## Chunking pipeline
+
+See `docs/chunking.md`. Migration `b62e5a8c1d7f_chunk_fields` adds the
+provenance/token fields to `content_chunks` and drops the old
+`UNIQUE (content_block_id, sequence)` in favour of multi-block chunks.
 
 ## Quran domain
 

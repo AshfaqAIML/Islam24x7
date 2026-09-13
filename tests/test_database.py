@@ -261,9 +261,12 @@ def test_book_structure_provenance(db: Session) -> None:
         book=book,
         content_block=block,
         source_file=sf,
-        page_number=7,
+        page_start=7,
+        page_end=7,
         sequence=1,
         text="Original paragraph text.",
+        language="en",
+        token_count=3,
         status="pending",
     )
     db.add_all([chapter, section, page, para, block, chunk])
@@ -320,9 +323,12 @@ def test_chunk_duplicate_id_rejected(db: Session) -> None:
             book=book,
             content_block=block,
             source_file=sf,
-            page_number=1,
+            page_start=1,
+            page_end=1,
             sequence=1,
             text="a",
+            language="en",
+            token_count=1,
             status="pending",
         )
     )
@@ -333,9 +339,12 @@ def test_chunk_duplicate_id_rejected(db: Session) -> None:
             book=book,
             content_block=block,
             source_file=sf,
-            page_number=1,
+            page_start=1,
+            page_end=1,
             sequence=2,
             text="b",
+            language="en",
+            token_count=1,
             status="pending",
         )
     )
@@ -470,9 +479,12 @@ def test_search_document_links_chunk(db: Session) -> None:
         book=book,
         content_block=block,
         source_file=sf,
-        page_number=3,
+        page_start=3,
+        page_end=3,
         sequence=1,
         text="جملة للبحث",
+        language="ar",
+        token_count=4,
         status="validated",
     )
     doc = SearchDocument(
@@ -513,9 +525,12 @@ def test_embedding_model_and_vector(db: Session) -> None:
         book=book,
         content_block=block,
         source_file=sf,
-        page_number=4,
+        page_start=4,
+        page_end=4,
         sequence=1,
         text="vector probe",
+        language="en",
+        token_count=2,
         status="published",
     )
     db.add_all([page, block, chunk])
