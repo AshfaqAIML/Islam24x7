@@ -161,9 +161,7 @@ def _open_strict(path: Path) -> pymupdf.Document | None:
         return None
 
 
-def _render_page(
-    document: pymupdf.Document, page_number: int, dpi: int, png_path: Path
-) -> None:
+def _render_page(document: pymupdf.Document, page_number: int, dpi: int, png_path: Path) -> None:
     page = document.load_page(page_number - 1)  # type: ignore[no-untyped-call]
     pixmap = page.get_pixmap(dpi=dpi)
     pixmap.save(str(png_path))
@@ -208,9 +206,7 @@ def ocr_file(
 
     existing = {
         row.page_number: row
-        for row in session.scalars(
-            select(OcrPage).where(OcrPage.source_file_id == source_file.id)
-        )
+        for row in session.scalars(select(OcrPage).where(OcrPage.source_file_id == source_file.id))
     }
 
     render_dir.mkdir(parents=True, exist_ok=True)
@@ -232,36 +228,63 @@ def ocr_file(
                 _render_page(document, page_number, config.dpi, page_image)
             except Exception as exc:
                 row = _persist_page(
-                    session, source_file.id, page_number, engine, config,
-                    OcrStatus.FAILED, confidence=None, quality_notes=None, text_chars=0,
-                    text_path=None, image_path=_rel(root, page_image),
-                    error=f"render failed: {exc}", existing=existing.get(page_number),
+                    session,
+                    source_file.id,
+                    page_number,
+                    engine,
+                    config,
+                    OcrStatus.FAILED,
+                    confidence=None,
+                    quality_notes=None,
+                    text_chars=0,
+                    text_path=None,
+                    image_path=_rel(root, page_image),
+                    error=f"render failed: {exc}",
+                    existing=existing.get(page_number),
                 )
                 result.pages_failed += 1
                 _append_page_result(result, row)
+                session.commit()
                 continue
 
             try:
                 snippet = engine.ocr_image(page_image, config.languages)
             except Exception as exc:
                 row = _persist_page(
-                    session, source_file.id, page_number, engine, config,
-                    OcrStatus.FAILED, confidence=None, quality_notes=None, text_chars=0,
-                    text_path=None, image_path=_rel(root, page_image),
-                    error=f"ocr failed: {exc}", existing=existing.get(page_number),
+                    session,
+                    source_file.id,
+                    page_number,
+                    engine,
+                    config,
+                    OcrStatus.FAILED,
+                    confidence=None,
+                    quality_notes=None,
+                    text_chars=0,
+                    text_path=None,
+                    image_path=_rel(root, page_image),
+                    error=f"ocr failed: {exc}",
+                    existing=existing.get(page_number),
                 )
                 result.pages_failed += 1
                 _append_page_result(result, row)
+                session.commit()
                 continue
 
             page_text = text_dir / f"{_PAGE_NO.format(page_number)}.txt"
             status, notes = assess_quality(snippet, config)
             page_text.write_text(snippet.text, encoding="utf-8")
             row = _persist_page(
-                session, source_file.id, page_number, engine, config, status,
-                confidence=snippet.confidence, quality_notes=", ".join(notes) or None,
+                session,
+                source_file.id,
+                page_number,
+                engine,
+                config,
+                status,
+                confidence=snippet.confidence,
+                quality_notes=", ".join(notes) or None,
                 text_chars=density_chars(snippet.text),
-                text_path=_rel(root, page_text), image_path=_rel(root, page_image),
+                text_path=_rel(root, page_text),
+                image_path=_rel(root, page_image),
                 existing=existing.get(page_number),
             )
             result.pages_ocr += 1
@@ -270,6 +293,8 @@ def ocr_file(
             if snippet.confidence is not None:
                 confidences.append(snippet.confidence)
             _append_page_result(result, row)
+
+            session.commit()
 
     if confidences:
         result.avg_confidence = sum(confidences) / len(confidences)

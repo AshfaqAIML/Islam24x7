@@ -146,7 +146,7 @@ class TesseractEngine:
 
     def ocr_image(self, image_path: Path, languages: Sequence[str]) -> OcrSnippet:
         import pytesseract
-        from PIL import Image  # type: ignore[import-not-found]
+        from PIL import Image
 
         lang = "+".join(languages)
         available = set(pytesseract.get_languages(config=""))
@@ -165,9 +165,7 @@ class TesseractEngine:
         return OcrSnippet(text=text, confidence=confidence, languages=languages)
 
 
-def _tesseract_confidence(
-    pytesseract: Any, image: Any, lang: str, config: str
-) -> float | None:
+def _tesseract_confidence(pytesseract: Any, image: Any, lang: str, config: str) -> float | None:
     """Mean word-level confidence (0-100) from ``image_to_data``."""
     try:
         data = pytesseract.image_to_data(
@@ -201,12 +199,11 @@ class EasyOcrEngine:
             return importlib.metadata.version("easyocr")
         except Exception as exc:
             raise OcrEngineUnavailable(
-                "easyocr is not installed. Run `pip install easyocr` "
-                "(see docs/ocr-setup.md)."
+                "easyocr is not installed. Run `pip install easyocr` (see docs/ocr-setup.md)."
             ) from exc
 
     def ocr_image(self, image_path: Path, languages: Sequence[str]) -> OcrSnippet:
-        import easyocr  # type: ignore[import-not-found]
+        import easyocr  # type: ignore[import-untyped]
 
         try:
             reader = easyocr.Reader(list(languages), gpu=self.gpu, verbose=False)
@@ -214,7 +211,7 @@ class EasyOcrEngine:
             raise OcrEngineUnavailable(
                 f"EasyOCR could not start for languages {list(languages)}: {exc}"
             ) from exc
-        results = reader.readtext(str(image_path), detail=1, paragraph=True)
+        results = reader.readtext(str(image_path), detail=1, paragraph=False)
         text = "\n".join(content for _bbox, content, _confidence in results)
         confidences = [float(c) for _bbox, _content, c in results]
         confidence = (sum(confidences) / len(confidences) * 100) if confidences else None

@@ -8,9 +8,10 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from knowledge_base.core.hashing import sha256_file
 from knowledge_base.database.enums import JobType, SourceStatus
 from knowledge_base.database.models.sources import ProcessingJob, SourceFile
-from knowledge_base.pipeline.ingest.ingest import ingest_directory, raw_target
+from knowledge_base.pipeline.ingest.ingest import IngestionError, ingest_directory, raw_target
 
 _PDF_BYTES = b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n"
 
@@ -50,6 +51,41 @@ def test_ingest_registers_and_stores(db: Session, tmp_path: Path) -> None:
     assert job.status == "succeeded"
     assert job.manifest["category"] == "hadith"
     assert job.manifest["size_bytes"] == len(_PDF_BYTES)
+
+
+def test_ingest_reuses_intact_orphan_copy(db: Session, tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    path = _write(source, "bukhari_vol_1.pdf")
+    data_dir = tmp_path / "data"
+    sha = sha256_file(path)
+    target = raw_target(data_dir, "books", sha, path.name)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(_PDF_BYTES)
+
+    results = ingest_directory(source, session=db, data_dir=data_dir)
+    db.commit()
+
+    assert results[0].status == "registered"
+    assert results[0].target == target
+    sf = db.scalar(select(SourceFile))
+    assert sf is not None
+    assert sf.sha256 == sha
+    job = db.scalar(select(ProcessingJob).where(ProcessingJob.job_type == JobType.INGEST))
+    assert job is not None
+    assert job.status == "succeeded"
+
+
+def test_ingest_rejects_orphan_copy_with_different_content(db: Session, tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    path = _write(source, "bukhari_vol_1.pdf")
+    data_dir = tmp_path / "data"
+    sha = sha256_file(path)
+    target = raw_target(data_dir, "books", sha, path.name)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"%PDF-1.4\n%% truncated/garbled copy\n")
+
+    with pytest.raises(IngestionError):
+        ingest_directory(source, session=db, data_dir=data_dir)
 
 
 def test_ingest_duplicate_is_skipped(db: Session, tmp_path: Path) -> None:

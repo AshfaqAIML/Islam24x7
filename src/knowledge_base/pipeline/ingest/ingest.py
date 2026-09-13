@@ -53,15 +53,7 @@ class IngestionResult:
 
 def raw_target(data_dir: Path, category: str, sha256: str, filename: str) -> Path:
     """Return the content-addressed storage path for an ingested file."""
-    return (
-        data_dir
-        / "raw"
-        / category
-        / sha256[:2]
-        / sha256[2:4]
-        / sha256
-        / filename
-    )
+    return data_dir / "raw" / category / sha256[:2] / sha256[2:4] / sha256 / filename
 
 
 def _quarantine_target(data_dir: Path, path: Path) -> Path:
@@ -113,8 +105,8 @@ def ingest_file(
 
     data_dir.mkdir(parents=True, exist_ok=True)
     target.parent.mkdir(parents=True, exist_ok=True)
-    if target.exists():
-        raise IngestionError(f"target already exists: {target}")
+    if target.exists() and sha256_file(target) != sha:
+        raise IngestionError(f"target already exists with different content: {target}")
 
     try:
         source_file = SourceFile(
@@ -130,9 +122,10 @@ def ingest_file(
             "size_bytes": path.stat().st_size,
             "category": category,
         }
-        with target.open("xb") as handle, path.open("rb") as source:
-            for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                handle.write(chunk)
+        if not target.exists():
+            with target.open("xb") as handle, path.open("rb") as source:
+                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    handle.write(chunk)
         session.add(source_file)
         session.flush()
         session.add(
