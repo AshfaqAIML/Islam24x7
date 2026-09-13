@@ -42,7 +42,7 @@ def parse_query(text: str) -> ParsedQuery:
         m.group(1).strip() for m in _QUOTED.finditer(text) if m.group(1).strip()
     )
     remainder = _QUOTED.sub(" ", text)
-    terms = tuple(remainder.split())
+    terms = tuple(t for t in remainder.split() if t and not set(t).issubset('" '))
     return ParsedQuery(terms=terms, phrases=phrases)
 
 
