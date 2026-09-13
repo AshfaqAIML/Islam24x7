@@ -214,6 +214,7 @@ def cmd_process(
     start_from: str | None = None,
     stop_at: str | None = None,
     ocr_engine: str | None = None,
+    ocr_langs: str | None = None,
     embed_provider: str | None = None,
     dry_run: bool = False,
     as_json: bool = False,
@@ -247,7 +248,8 @@ def cmd_process(
         from knowledge_base.pipeline.ocr.config import OcrConfig
         from knowledge_base.pipeline.ocr.engines import build_engine
 
-        ocr_cfg = OcrConfig(engine=ocr_engine)
+        languages = tuple(part.strip() for part in (ocr_langs or "").split(",") if part.strip())
+        ocr_cfg = OcrConfig(engine=ocr_engine, languages=languages or ("ur", "ar"))
         run_kwargs["ocr_engine"] = build_engine(ocr_engine, ocr_cfg)
         run_kwargs["ocr_config"] = ocr_cfg
     if embed_provider:
@@ -255,8 +257,13 @@ def cmd_process(
         from knowledge_base.pipeline.embed.provider import build_provider
 
         embed_cfg = EmbedConfig()
-        run_kwargs["embed_provider"] = build_provider(embed_provider, embed_cfg)
-        run_kwargs["embed_config"] = embed_cfg
+        provider = build_provider(embed_provider, embed_cfg)
+        run_kwargs["embed_provider"] = provider
+        run_kwargs["embed_config"] = EmbedConfig(
+            model_name=provider.source_model or embed_cfg.model_name,
+            model_version=provider.version,
+            dimensions=provider.dimensions,
+        )
 
     with session_scope(factory) as session:
         if source_path:

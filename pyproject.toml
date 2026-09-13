@@ -22,6 +22,8 @@ dependencies = [
     "pymupdf>=1.24",
     "fastapi>=0.141.1",
     "uvicorn[standard]>=0.52.4",
+    "easyocr>=1.7.2",
+    "sentence-transformers>=6.0.1",
 ]
 
 [project.optional-dependencies]

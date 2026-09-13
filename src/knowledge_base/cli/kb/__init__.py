@@ -126,6 +126,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="ocr engine (tesseract, easyocr, dummy, or pkg.module:Cls)",
     )
     proc.add_argument(
+        "--ocr-langs",
+        default=None,
+        help=("comma-separated OCR language codes, e.g. ur,ar (default: engine/config languages)"),
+    )
+    proc.add_argument(
         "--embed-provider", default=None, help="embedding provider name (default: settings)"
     )
     proc.add_argument(
@@ -324,6 +329,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 start_from=args.start_from,
                 stop_at=args.stop_at,
                 ocr_engine=args.ocr_engine,
+                ocr_langs=args.ocr_langs,
                 embed_provider=args.embed_provider,
                 dry_run=args.dry_run,
                 as_json=args.as_json,

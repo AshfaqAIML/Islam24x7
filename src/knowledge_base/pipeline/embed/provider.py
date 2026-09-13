@@ -54,6 +54,7 @@ class EmbeddingProvider(Protocol):
     name: str
     version: str
     dimensions: int
+    source_model: str | None = None
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         """Return one vector per input text; ``len(vector) == dimensions``."""
@@ -65,12 +66,14 @@ def build_provider(name: str, config: EmbedConfig) -> EmbeddingProvider:
     path for custom providers (``pkg.module:ClassName``)."""
     if name == "dummy":
         return DummyEmbeddingProvider(dimensions=config.dimensions)
+    if name == "sentence-transformers":
+        return SentenceTransformerProvider()
     if ":" in name:
         module_name, _, class_name = name.partition(":")
         return _load_custom(module_name, class_name)
     raise EmbeddingProviderUnavailable(
-        f"Unknown embedding provider {name!r}. Choose 'dummy' or a "
-        f"'pkg.module:ClassName' path."
+        f"Unknown embedding provider {name!r}. Choose 'dummy', 'sentence-transformers', "
+        f"or a 'pkg.module:ClassName' path."
     )
 
 
@@ -96,6 +99,7 @@ class DummyEmbeddingProvider:
     """
 
     name = "dummy"
+    source_model: str | None = None
 
     def __init__(self, dimensions: int = 768) -> None:
         self.dimensions = dimensions
@@ -106,6 +110,82 @@ class DummyEmbeddingProvider:
 
     def __repr__(self) -> str:
         return f"<DummyEmbeddingProvider dims={self.dimensions} v{self.version}>"
+
+
+class SentenceTransformerProvider:
+    """A local multilingual embedding backend via ``sentence-transformers``.
+
+    Uses a deterministic ONNX-free local model (``paraphrase-multilingual-mpnet
+    -base-v2``, 768 dims, 50+ languages) so no network or API key is needed
+    after the initial model download. Vectors are L2-normalised, matching how
+    the pgvector cosine search expects them.
+
+    The model tensors are loaded once per process and reused across batches.
+    """
+
+    name = "sentence-transformers"
+    source_model: str | None = "paraphrase-multilingual-mpnet-base-v2"
+    _model = None  # process-wide shared SentenceTransformer instance
+
+    def __init__(self, model_name: str | None = None) -> None:
+        if model_name:
+            self.source_model = model_name
+        self._resolve()
+        self.version = self._resolve_version()
+        self.dimensions = self._model.get_sentence_embedding_dimension()  # type: ignore[attr-defined]
+
+    def _resolve(self) -> None:
+        if SentenceTransformerProvider._model is not None:
+            return
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as exc:
+            raise EmbeddingProviderUnavailable(
+                "sentence-transformers is not installed. "
+                "Run `uv add sentence-transformers` (see docs/ocr-setup.md)."
+            ) from exc
+        try:
+            SentenceTransformerProvider._model = SentenceTransformer(
+                self.source_model,
+                device=_device(),
+            )
+        except Exception as exc:
+            raise EmbeddingProviderUnavailable(
+                f"sentence-transformers could not load model {self.source_model!r}: {exc}"
+            ) from exc
+
+    @staticmethod
+    def _resolve_version() -> str:
+        try:
+            import importlib.metadata
+
+            return importlib.metadata.version("sentence-transformers")
+        except Exception:
+            return "unknown"
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        model = SentenceTransformerProvider._model
+        assert model is not None
+        encoded = model.encode(list(texts), normalize_embeddings=True, convert_to_numpy=True)
+        return [row.tolist() for row in encoded]
+
+    def __repr__(self) -> str:
+        return (
+            f"<SentenceTransformerProvider model={self.source_model} "
+            f"dims={self.dimensions} v{self.version}>"
+        )
+
+
+def _device() -> str:
+    """Use CUDA when available, otherwise CPU (deterministic local runs)."""
+    try:
+        import torch
+
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
 
 
 def _char_ngrams(text: str, width: int = 3) -> list[str]:
@@ -192,7 +272,11 @@ def embed_with_retry(
             delay = backoff_seconds * (2**attempt)
             logger.warning(
                 "embed provider={} {} attempt={}/{} retrying in {}s",
-                provider.name, reason, attempt + 1, max_retries, delay,
+                provider.name,
+                reason,
+                attempt + 1,
+                max_retries,
+                delay,
             )
             time.sleep(delay)
             attempt += 1
@@ -207,6 +291,7 @@ __all__ = [
     "EmbeddingProviderUnavailable",
     "RateLimitedError",
     "RateLimiter",
+    "SentenceTransformerProvider",
     "build_provider",
     "embed_with_retry",
 ]
