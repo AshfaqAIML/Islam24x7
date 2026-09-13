@@ -425,6 +425,17 @@ def _build_parser() -> argparse.ArgumentParser:
     hybrid.add_argument("--limit", type=int, default=20, help="max results (default 20)")
     hybrid.add_argument("--json", action="store_true", help="print results as JSON")
 
+    cite = sub.add_parser(
+        "cite",
+        help="Print source citations for a source file's content chunks",
+    )
+    cite.add_argument(
+        "sha256", help="source file sha256 prefix (matches chunks from that file)"
+    )
+    cite.add_argument("--limit", type=int, default=20,
+                      help="max citations (default 20)")
+    cite.add_argument("--json", action="store_true", help="print citations as JSON")
+
     return parser
 
 
@@ -584,6 +595,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             source_type=args.source_type,
             author=args.author,
             min_score=args.min_score,
+            limit=args.limit,
+            as_json=args.json,
+        )
+    elif command == "cite":
+        return commands.cmd_cite(
+            args.sha256,
             limit=args.limit,
             as_json=args.json,
         )

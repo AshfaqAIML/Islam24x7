@@ -1279,6 +1279,52 @@ def _load_user_items(path: Path | None) -> list[tuple[str, str]] | None:
     raise ValueError("user metadata json must be an object or a list of {field, value}")
 
 
+def cmd_cite(
+    sha256: str,
+    *,
+    limit: int = 20,
+    as_json: bool = False,
+) -> int:
+    """Print DB-originated source citations for a source file's chunks."""
+    from sqlalchemy import select
+
+    from knowledge_base.citations import citation_from_db
+    from knowledge_base.database import create_app_engine, make_session_factory, session_scope
+    from knowledge_base.database.models.sources import SourceFile
+    from knowledge_base.database.models.structure import ContentChunk
+
+    settings = _settings()
+    engine = create_app_engine(settings.database_url)
+    factory = make_session_factory(engine)
+    with session_scope(factory) as session:
+        stmt = (
+            select(ContentChunk)
+            .join(SourceFile, ContentChunk.source_file_id == SourceFile.id)
+            .where(SourceFile.sha256.startswith(sha256))
+            .order_by(ContentChunk.sequence)
+            .limit(limit)
+        )
+        chunks = session.scalars(stmt).all()
+        citations = [citation_from_db(c) for c in chunks]
+
+    if as_json:
+        print(json.dumps([c.to_dict() for c in citations], ensure_ascii=False, indent=2))
+    else:
+        if not citations:
+            print(f"No content found for source sha256 '{sha256}'.")
+            return 0
+        for idx, citation in enumerate(citations, start=1):
+            print(f"[{idx}] {citation.reference()}")
+            print(f"    Source: {citation.source_sha256}")
+            if citation.page is not None:
+                print(f"    Page:   {citation.page}")
+            if citation.chunk_id:
+                print(f"    Chunk:  {citation.chunk_id}")
+            if citation.content_id:
+                print(f"    Content: {citation.content_id}")
+    return 0
+
+
 __all__ = [
     "cmd_env",
     "cmd_glob",
@@ -1299,5 +1345,6 @@ __all__ = [
     "cmd_search",
     "cmd_similar",
     "cmd_hybrid",
+    "cmd_cite",
     "cmd_version",
 ]
