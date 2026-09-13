@@ -46,6 +46,7 @@ from knowledge_base.pipeline.ocr.engines import OcrEngine, OcrSnippet
 
 _PAGE_NO = "{0:04d}"
 _EMPTY_SNIPPET_QUALITY_NOTES = "no_text"
+_ENGINE_RECYCLE_EVERY = 50
 
 
 def density_chars(text: str) -> int:
@@ -212,6 +213,14 @@ def ocr_file(
     render_dir.mkdir(parents=True, exist_ok=True)
     text_dir.mkdir(parents=True, exist_ok=True)
     confidences: list[float] = []
+    pages_since_recycle = 0
+
+    def _recycle_if_due() -> None:
+        nonlocal pages_since_recycle
+        pages_since_recycle += 1
+        if pages_since_recycle >= _ENGINE_RECYCLE_EVERY:
+            engine.dispose()
+            pages_since_recycle = 0
 
     with document:
         for page_number in required:
@@ -245,6 +254,7 @@ def ocr_file(
                 result.pages_failed += 1
                 _append_page_result(result, row)
                 session.commit()
+                _recycle_if_due()
                 continue
 
             try:
@@ -268,6 +278,7 @@ def ocr_file(
                 result.pages_failed += 1
                 _append_page_result(result, row)
                 session.commit()
+                _recycle_if_due()
                 continue
 
             page_text = text_dir / f"{_PAGE_NO.format(page_number)}.txt"
@@ -295,6 +306,7 @@ def ocr_file(
             _append_page_result(result, row)
 
             session.commit()
+            _recycle_if_due()
 
     if confidences:
         result.avg_confidence = sum(confidences) / len(confidences)

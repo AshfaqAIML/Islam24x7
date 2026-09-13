@@ -56,6 +56,14 @@ class OcrEngine(Protocol):
         """Run OCR on a single rendered page image and return the snippet."""
         ...  # pragma: no cover
 
+    def dispose(self) -> None:
+        """Release any heavy in-process resources (models, buffers).
+
+        Called periodically by the processor so long-running jobs do not
+        accumulate memory. Implementations without such state do nothing.
+        """
+        ...  # pragma: no cover
+
 
 def build_engine(name: str, config: OcrConfig) -> OcrEngine:
     """Return a backend for ``name``; ``name`` may be a fully qualified class
@@ -114,6 +122,9 @@ class DummyEngine:
         text, confidence = self.by_page.get(page, self.defaults)
         return OcrSnippet(text=text, confidence=confidence, languages=languages)
 
+    def dispose(self) -> None:
+        pass
+
 
 class TesseractEngine:
     """Tesseract OCR via ``pytesseract``.
@@ -164,6 +175,9 @@ class TesseractEngine:
         confidence = _tesseract_confidence(pytesseract, image, lang, config)
         return OcrSnippet(text=text, confidence=confidence, languages=languages)
 
+    def dispose(self) -> None:
+        pass
+
 
 def _tesseract_confidence(pytesseract: Any, image: Any, lang: str, config: str) -> float | None:
     """Mean word-level confidence (0-100) from ``image_to_data``."""
@@ -184,13 +198,22 @@ def _tesseract_confidence(pytesseract: Any, image: Any, lang: str, config: str) 
 
 
 class EasyOcrEngine:
-    """EasyOCR (PyTorch) backend with built-in Arabic/Urdu/English models."""
+    """EasyOCR (PyTorch) backend with built-in Arabic/Urdu/English models.
+
+    The ``easyocr.Reader`` is created once and reused for every page — model
+    initialization is expensive (tens of seconds on CPU) and constructing a
+    reader per page also lets PyTorch's allocator grow without bound over a
+    long book run. :meth:`dispose` drops the cached reader so the processor
+    can recycle it periodically and pin memory usage.
+    """
 
     def __init__(self, config: OcrConfig, gpu: bool = False) -> None:
         self.config = config
         self.gpu = gpu
         self.name = "easyocr"
         self.version = self._resolve_version()
+        self._reader: Any | None = None
+        self._languages: tuple[str, ...] | None = None
 
     def _resolve_version(self) -> str:
         try:
@@ -202,7 +225,10 @@ class EasyOcrEngine:
                 "easyocr is not installed. Run `pip install easyocr` (see docs/ocr-setup.md)."
             ) from exc
 
-    def ocr_image(self, image_path: Path, languages: Sequence[str]) -> OcrSnippet:
+    def _ensure_reader(self, languages: Sequence[str]) -> Any:
+        key = tuple(languages)
+        if self._reader is not None and self._languages == key:
+            return self._reader
         import easyocr  # type: ignore[import-untyped]
 
         try:
@@ -211,11 +237,24 @@ class EasyOcrEngine:
             raise OcrEngineUnavailable(
                 f"EasyOCR could not start for languages {list(languages)}: {exc}"
             ) from exc
+        self._reader = reader
+        self._languages = key
+        return reader
+
+    def ocr_image(self, image_path: Path, languages: Sequence[str]) -> OcrSnippet:
+        reader = self._ensure_reader(languages)
         results = reader.readtext(str(image_path), detail=1, paragraph=False)
         text = "\n".join(content for _bbox, content, _confidence in results)
         confidences = [float(c) for _bbox, _content, c in results]
         confidence = (sum(confidences) / len(confidences) * 100) if confidences else None
         return OcrSnippet(text=text, confidence=confidence, languages=languages)
+
+    def dispose(self) -> None:
+        self._reader = None
+        self._languages = None
+        import gc
+
+        gc.collect()
 
 
 __all__ = [
