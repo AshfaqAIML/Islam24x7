@@ -159,10 +159,25 @@ provenance/token fields to `content_chunks` and drops the old
 
 ## Search domain
 
-`search_documents` — `UNIQUE (content_chunk_id, language)`; also supports
-display-level rows (e.g. whole surah / hadith translation) via `document_type`.
-`search_vector` is a `tsvector` with a GIN index
-(`ix_search_documents_vector`); includes `title`, `body_text`, `language`.
+Migration `c19d4e8f2b6a_add_search_indexes` builds the two index families
+that serve full-text search:
+
+- **`tsvector` (GIN)** over `search_documents.body_text`, `ayahs.text`,
+  `ayah_translations.text` and `hadiths.text`/`text_arabic`. Every vector
+  concatenates the language-aware component (`arabic`/`english`/`simple`) with
+  a verbatim `simple` component, so queries always match with the `simple`
+  configuration. Values are maintained by `BEFORE INSERT/UPDATE` triggers
+  (`kb_tsvector_search_documents`, `kb_tsvector_ayah`,
+  `kb_tsvector_ayah_translation`, `kb_tsvector_hadith`).
+- **`pg_trgm` (GIN)** trigram indexes for substring matching over the catalog
+  fields: `books.title`/`subtitle`, `authors.name`/`name_arabic`,
+  `chapters.title`, `sections.title`.
+
+`search_documents` — `UNIQUE (content_chunk_id, language)`; `document_type`
+distinguishes per-chunk rows (`chunk`) from display-level rows (e.g. whole
+surah / hadith translation); its FK → `content_chunks.id` is
+`ON DELETE CASCADE`, so re-chunking cleans stale documents automatically.
+`ProcessingJob(job_type=INDEX)` records each run. See `docs/searching.md`.
 
 ## Embeddings domain
 

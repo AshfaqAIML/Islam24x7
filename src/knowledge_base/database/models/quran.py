@@ -11,6 +11,7 @@ import uuid
 from typing import TYPE_CHECKING
 
 from sqlalchemy import ForeignKey, Index, Integer, String, Text, UniqueConstraint, Uuid
+from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from knowledge_base.database.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -48,6 +49,7 @@ class Ayah(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         UniqueConstraint("surah_id", "number", name="uq_ayahs_surah_number"),
         Index("ix_ayahs_surah_id", "surah_id"),
         Index("ix_ayahs_number", "number"),
+        Index("ix_ayahs_search_vector", "search_vector", postgresql_using="gin"),
     )
 
     surah_id: Mapped[uuid.UUID] = mapped_column(
@@ -60,6 +62,7 @@ class Ayah(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     text: Mapped[str] = mapped_column(Text, nullable=False)
     page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     juz: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    search_vector: Mapped[str | None] = mapped_column(TSVECTOR, nullable=True)
 
     surah: Mapped[Surah] = relationship(back_populates="ayahs")
     source_file: Mapped[SourceFile] = relationship()
@@ -78,6 +81,7 @@ class Translation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint("ayah_id", "language", "translator", name="uq_ayah_trans_ayah_lang_tr"),
         Index("ix_ayah_translations_language", "language"),
+        Index("ix_ayah_translations_search_vector", "search_vector", postgresql_using="gin"),
     )
 
     ayah_id: Mapped[uuid.UUID] = mapped_column(
@@ -89,6 +93,7 @@ class Translation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     language: Mapped[str] = mapped_column(String(16), nullable=False)
     translator: Mapped[str] = mapped_column(String(255), nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
+    search_vector: Mapped[str | None] = mapped_column(TSVECTOR, nullable=True)
 
     ayah: Mapped[Ayah] = relationship(back_populates="translations")
     source_file: Mapped[SourceFile] = relationship()

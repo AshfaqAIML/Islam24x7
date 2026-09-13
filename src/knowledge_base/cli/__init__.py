@@ -260,6 +260,50 @@ def _build_parser() -> argparse.ArgumentParser:
         "--overlap", type=int, default=64, help="overlap budget in tokens (whole paragraphs)"
     )
 
+    index = sub.add_parser(
+        "index",
+        help="Build full-text search documents for published books",
+    )
+    index_sub = index.add_subparsers(dest="index_command", required=True)
+    index_run = index_sub.add_parser(
+        "run",
+        help="Index a published book's chunks as search documents (idempotent)",
+    )
+    index_run.add_argument("--sha256", help="index one book by source sha256 prefix")
+    index_run.add_argument(
+        "--all", dest="index_all_", action="store_true", help="index all published books"
+    )
+    index_run.add_argument(
+        "--limit", type=int, default=None, help="cap the number of books with --all"
+    )
+
+    search = sub.add_parser(
+        "search",
+        help="Full-text search across books, content, Quran, and hadith",
+    )
+    search.add_argument("query", help='keywords and/or quoted "exact phrase"')
+    search.add_argument(
+        "--domains",
+        nargs="+",
+        choices=["book", "chapter", "section", "content", "quran", "hadith"],
+        default=None,
+        help="domains to search (default: all)",
+    )
+    search.add_argument(
+        "--all-terms", action="store_true", help="require every keyword (AND instead of OR)"
+    )
+    search.add_argument(
+        "--language",
+        choices=["ar", "ur", "en"],
+        default=None,
+        help="restrict search by language",
+    )
+    search.add_argument("--category", help="category code (e.g. fiqh, tafsir)")
+    search.add_argument("--book", dest="source", help="source sha256 prefix")
+    search.add_argument("--author", help="author name substring")
+    search.add_argument("--limit", type=int, default=20, help="max results (default 20)")
+    search.add_argument("--json", action="store_true", help="print results as JSON")
+
     return parser
 
 
@@ -362,6 +406,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             limit=args.limit,
             max_tokens=args.max_tokens,
             overlap_tokens=args.overlap,
+        )
+    elif command == "index" and args.index_command == "run":
+        return commands.cmd_index_run(
+            args.sha256, index_all_=args.index_all_, limit=args.limit
+        )
+    elif command == "search":
+        return commands.cmd_search(
+            args.query,
+            domains=tuple(args.domains) if args.domains else None,
+            all_terms=args.all_terms,
+            language=args.language,
+            category=args.category,
+            source=args.source,
+            author=args.author,
+            limit=args.limit,
+            as_json=args.json,
         )
     return 0
 

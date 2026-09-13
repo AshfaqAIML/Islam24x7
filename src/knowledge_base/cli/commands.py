@@ -201,6 +201,110 @@ def cmd_chunk_run(
     return 0
 
 
+def cmd_index_run(
+    sha256: str | None,
+    *,
+    index_all_: bool = False,
+    limit: int | None = None,
+) -> int:
+    """Index a book's chunks as full-text search documents (idempotent)."""
+    from knowledge_base.database import create_app_engine, make_session_factory, session_scope
+    from knowledge_base.logging import logger
+    from knowledge_base.pipeline.index.index import index_all as run_all
+    from knowledge_base.pipeline.index.index import index_book
+
+    settings = _settings()
+    engine = create_app_engine(settings.database_url)
+    factory = make_session_factory(engine)
+    with session_scope(factory) as session:
+        if sha256:
+            book = _find_book(session, sha256)
+            if book is None:
+                print(f"No published book matching sha256 prefix {sha256!r}", file=sys.stderr)
+                return 1
+            results = [index_book(book, session=session, data_dir=settings.data_dir)]
+        elif index_all_:
+            results = run_all(session, settings=settings, limit=limit)
+        else:
+            print("Use --sha256 <prefix> or --all", file=sys.stderr)
+            return 2
+
+    for result in results:
+        logger.info(
+            "index {} lang={} chunks={} documents={}",
+            result.sha256[:12], result.language.value,
+            result.chunk_count, result.document_count,
+        )
+        print(
+            f"{result.sha256[:12]:12s} lang={result.language.value:3s} "
+            f"chunks={result.chunk_count:<4d} documents={result.document_count:<4d}  "
+            f"{result.error or result.report_path}"
+        )
+    return 0
+
+
+def cmd_search(
+    query: str,
+    *,
+    domains: tuple[str, ...] | None = None,
+    all_terms: bool = False,
+    language: str | None = None,
+    category: str | None = None,
+    source: str | None = None,
+    author: str | None = None,
+    limit: int = 20,
+    as_json: bool = False,
+) -> int:
+    """Run a full-text search and render the hits."""
+    from dataclasses import asdict
+
+    from knowledge_base.database import create_app_engine, make_session_factory, session_scope
+    from knowledge_base.search import SearchParams, search
+
+    settings = _settings()
+    engine = create_app_engine(settings.database_url)
+    factory = make_session_factory(engine)
+    with session_scope(factory) as session:
+        params = SearchParams(
+            query=query,
+            all_terms=all_terms,
+            language=language,
+            category=category,
+            source=source,
+            author=author,
+            limit=limit,
+        )
+        if domains is not None:
+            params.domains = domains
+        hits = search(session, params)
+
+    if as_json:
+        print(json.dumps([asdict(h) for h in hits], ensure_ascii=False, indent=2))
+    else:
+        if not hits:
+            print("No results found.")
+            return 0
+        for idx, hit in enumerate(hits, start=1):
+            print(f"[{idx}] {hit.domain}  rank={hit.rank:.4f}  {hit.title}")
+            if hit.book and hit.book != hit.title:
+                print(f"    Book: {hit.book}")
+            if hit.author:
+                print(f"    Author: {hit.author}")
+            if hit.chapter:
+                print(f"    Chapter: {hit.chapter}")
+            if hit.section and hit.domain != "section":
+                print(f"    Section: {hit.section}")
+            if hit.page:
+                print(f"    Page: {hit.page}")
+            if hit.citation:
+                print(f"    {hit.citation}")
+            text = (hit.snippet or hit.matched_text).strip().replace("\n", " ")
+            if len(text) > 140:
+                text = text[:137] + "..."
+            print(f"    Matched: {text}")
+    return 0
+
+
 def cmd_ingest(source_dir: Path, category: str, *, dry_run: bool = False) -> int:
     """Register every source file under ``source_dir`` into the KB database."""
     from collections import Counter
@@ -900,5 +1004,8 @@ __all__ = [
     "cmd_structure_detect",
     "cmd_structure_show",
     "cmd_structure_review",
+    "cmd_chunk_run",
+    "cmd_index_run",
+    "cmd_search",
     "cmd_version",
 ]

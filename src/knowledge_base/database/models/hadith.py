@@ -10,6 +10,7 @@ import uuid
 from typing import TYPE_CHECKING
 
 from sqlalchemy import ForeignKey, Index, String, Text, UniqueConstraint, Uuid
+from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from knowledge_base.database.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -100,6 +101,7 @@ class Hadith(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         UniqueConstraint("collection_id", "number", name="uq_hadiths_collection_number"),
         Index("ix_hadiths_collection_id", "collection_id"),
         Index("ix_hadiths_hadith_chapter_id", "hadith_chapter_id"),
+        Index("ix_hadiths_search_vector", "search_vector", postgresql_using="gin"),
     )
 
     collection_id: Mapped[uuid.UUID] = mapped_column(
@@ -119,6 +121,7 @@ class Hadith(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     text_arabic: Mapped[str | None] = mapped_column(Text, nullable=True)
     grade: Mapped[str | None] = mapped_column(String(255), nullable=True)
     narrator: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    search_vector: Mapped[str | None] = mapped_column(TSVECTOR, nullable=True)
 
     collection: Mapped[Collection] = relationship(back_populates="hadiths")
     hadith_book: Mapped[HadithBook | None] = relationship(back_populates="hadiths")

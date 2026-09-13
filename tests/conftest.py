@@ -34,6 +34,8 @@ def db_engine() -> Iterator[Engine]:
         pytest.skip(f"test database unreachable: {exc}")
     reset_schema(engine)
     Base.metadata.create_all(engine)
+    with engine.begin() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
     yield engine
     engine.dispose()
 
