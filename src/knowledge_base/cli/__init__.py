@@ -277,6 +277,45 @@ def _build_parser() -> argparse.ArgumentParser:
         "--limit", type=int, default=None, help="cap the number of books with --all"
     )
 
+    embed = sub.add_parser(
+        "embed",
+        help="Generate chunk embeddings for vector search",
+    )
+    embed_sub = embed.add_subparsers(dest="embed_command", required=True)
+    embed_run = embed_sub.add_parser(
+        "run",
+        help="Embed a published book's chunks (idempotent, incremental)",
+    )
+    embed_run.add_argument("--sha256", help="embed one book by source sha256 prefix")
+    embed_run.add_argument(
+        "--all", dest="embed_all_", action="store_true", help="embed all published books"
+    )
+    embed_run.add_argument(
+        "--limit", type=int, default=None, help="cap the number of books with --all"
+    )
+    embed_run.add_argument(
+        "--provider",
+        default=None,
+        help="provider name: dummy or pkg.module:ClassName (default: settings)",
+    )
+    embed_run.add_argument(
+        "--model", default=None, help="embedding model name (default: settings)"
+    )
+    embed_run.add_argument(
+        "--model-version",
+        default=None,
+        help="embedding model version (default: settings)",
+    )
+    embed_run.add_argument(
+        "--dimensions", type=int, default=None, help="vector dimensions (default: settings)"
+    )
+    embed_run.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help="texts per provider call (default: settings)",
+    )
+
     search = sub.add_parser(
         "search",
         help="Full-text search across books, content, Quran, and hadith",
@@ -410,6 +449,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     elif command == "index" and args.index_command == "run":
         return commands.cmd_index_run(
             args.sha256, index_all_=args.index_all_, limit=args.limit
+        )
+    elif command == "embed" and args.embed_command == "run":
+        return commands.cmd_embed_run(
+            args.sha256,
+            embed_all_=args.embed_all_,
+            limit=args.limit,
+            provider_name=args.provider,
+            model=args.model,
+            model_version=args.model_version,
+            dimensions=args.dimensions,
+            batch_size=args.batch_size,
         )
     elif command == "search":
         return commands.cmd_search(

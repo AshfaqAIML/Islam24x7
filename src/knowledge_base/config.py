@@ -40,6 +40,16 @@ class Settings(BaseSettings):
     database_url: str | None = Field(default=None)
     test_database_url: str | None = Field(default=None)
 
+    # Embedding pipeline (see pipeline/embed/config.py for defaults used here).
+    embedding_provider: str = Field(default="dummy")
+    embedding_model: str = Field(default="kb-dummy")
+    embedding_model_version: str = Field(default="0.1.0")
+    embedding_dimensions: int = Field(default=768)
+    embedding_batch_size: int = Field(default=64)
+    embedding_max_retries: int = Field(default=3)
+    embedding_backoff_seconds: float = Field(default=1.0)
+    embedding_calls_per_minute: int = Field(default=0)
+
     @classmethod
     def from_env_file(cls, env_file: str | os.PathLike[str], **kwargs: Any) -> Settings:
         """Build settings from a specific dotenv file instead of the default one.

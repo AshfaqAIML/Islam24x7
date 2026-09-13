@@ -537,7 +537,14 @@ def test_embedding_model_and_vector(db: Session) -> None:
     _commit(db)
 
     vector = [0.01] * 768
-    db.add(Embedding(model=model, chunk=chunk, vector=vector))
+    db.add(
+        Embedding(
+            model=model,
+            chunk=chunk,
+            vector=vector,
+            content_hash="54eb12f35c7ba5e0ec6da0c9d0f01c0fdc5bca0a69c00b3c1ea973b9d7e1b3d1",
+        )
+    )
     _commit(db)
 
     emb = db.scalar(select(Embedding).where(Embedding.content_chunk_id == chunk.id))

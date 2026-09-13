@@ -181,13 +181,20 @@ surah / hadith translation); its FK → `content_chunks.id` is
 
 ## Embeddings domain
 
+Migration `d7a52e1f9c4b_add_embedding_content_hash` adds vector content-hash
+tracking. See `docs/embedding.md` for the pipeline.
+
 | Table | Notable columns |
 | ----- | --------------- |
-| `embedding_models` | `name` `UNIQUE`, `provider`, `dimensions`, `version` (`UNIQUE` per name), `metadata_` JSONB |
-| `embeddings` | `UNIQUE (embedding_model_id, content_chunk_id)`; `vector` `vector(768)` with HNSW index `ix_embeddings_vector_hnsw` (cosine) |
+| `embedding_models` | `UNIQUE (name, version)`; `provider`, `dimensions`, `version` |
+| `embeddings` | `UNIQUE (model_id, content_chunk_id)`; `vector` `vector(768)` with HNSW index `ix_embeddings_vector_hnsw` (cosine); `content_hash` (SHA-256 of the exact chunk text the vector was generated from, indexed) |
 
-The fixed 768-dimensional base column allows the HNSW index; a production
-pipeline with a differently-dimensioned model can add a migration.
+The fixed 768-dimensional base column allows the HNSW index; a differently
+dimensioned model needs a migration to widen the column. `content_hash` lets
+`EMBED` re-runs skip unchanged chunks — unchanged vectors are never
+regenerated; a model upgrade (new `version`) writes fresh vectors under a new
+model while old ones remain tagged to theirs. `ProcessingJob(job_type=EMBED)`
+records each run.
 
 ## Normalization domain
 

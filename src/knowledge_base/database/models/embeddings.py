@@ -2,7 +2,9 @@
 
 Vectors are stored with pgvector in a ``vector(n)`` column and HNSW-indexed
 for ANN search. Each embedding is tagged with its model version so mixed-model
-vectors never silently collide (``UNIQUE(model_id, content_chunk_id)``).
+vectors never silently collide (``UNIQUE(model_id, content_chunk_id)``), and
+with the SHA-256 hash of the chunk text that produced it so the pipeline can
+skip unchanged content instead of re-embedding it.
 """
 
 from __future__ import annotations
@@ -51,6 +53,7 @@ class Embedding(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint("model_id", "content_chunk_id", name="uq_embeddings_model_chunk"),
         Index("ix_embeddings_content_chunk_id", "content_chunk_id"),
+        Index("ix_embeddings_content_hash", "content_hash"),
     )
 
     model_id: Mapped[uuid.UUID] = mapped_column(
@@ -60,6 +63,12 @@ class Embedding(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Uuid(as_uuid=True), ForeignKey("content_chunks.id"), nullable=False
     )
     vector: Mapped[list[float]] = mapped_column(Vector(_DEFAULT_DIMENSIONS), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    """SHA-256 of the chunk text this vector was generated from.
+
+    The embed pipeline compares this against the current chunk text so that
+    unchanged chunks are never re-embedded.
+    """
 
     model: Mapped[EmbeddingModel] = relationship(back_populates="embeddings")
     chunk: Mapped[ContentChunk] = relationship()

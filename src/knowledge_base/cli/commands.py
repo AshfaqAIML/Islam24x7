@@ -243,6 +243,92 @@ def cmd_index_run(
     return 0
 
 
+def cmd_embed_run(
+    sha256: str | None,
+    *,
+    embed_all_: bool = False,
+    limit: int | None = None,
+    provider_name: str | None = None,
+    model: str | None = None,
+    model_version: str | None = None,
+    dimensions: int | None = None,
+    batch_size: int | None = None,
+) -> int:
+    """Generate embeddings for a book's chunks (idempotent, incremental)."""
+    from dataclasses import replace
+
+    from knowledge_base.database import create_app_engine, make_session_factory, session_scope
+    from knowledge_base.logging import logger
+    from knowledge_base.pipeline.embed.config import EmbedConfig
+    from knowledge_base.pipeline.embed.processor import embed_all as run_all
+    from knowledge_base.pipeline.embed.processor import embed_book
+    from knowledge_base.pipeline.embed.provider import (
+        EmbeddingProviderUnavailable,
+        build_provider,
+    )
+
+    settings = _settings()
+    config = EmbedConfig.from_settings(settings)
+    overrides: dict[str, Any] = {}
+    if provider_name:
+        overrides["provider_name"] = provider_name
+    if model:
+        overrides["model_name"] = model
+    if model_version:
+        overrides["model_version"] = model_version
+    if dimensions:
+        overrides["dimensions"] = dimensions
+    if batch_size:
+        overrides["batch_size"] = batch_size
+    if overrides:
+        config = replace(config, **overrides)
+
+    try:
+        provider = build_provider(config.provider_name, config)
+    except EmbeddingProviderUnavailable as exc:
+        print(f"embedding provider unavailable: {exc}", file=sys.stderr)
+        return 3
+
+    engine = create_app_engine(settings.database_url)
+    factory = make_session_factory(engine)
+    with session_scope(factory) as session:
+        if sha256:
+            book = _find_book(session, sha256)
+            if book is None:
+                print(f"No published book matching sha256 prefix {sha256!r}", file=sys.stderr)
+                return 1
+            results = [
+                embed_book(
+                    book, session=session, data_dir=settings.data_dir,
+                    provider=provider, config=config,
+                )
+            ]
+        elif embed_all_:
+            results = run_all(
+                session, settings=settings, provider=provider,
+                config=config, limit=limit,
+            )
+        else:
+            print("Use --sha256 <prefix> or --all", file=sys.stderr)
+            return 2
+
+    for result in results:
+        logger.info(
+            "embed {} model={} v{} dims={} chunks={} embedded={} updated={} reused={}",
+            result.sha256[:12], result.model_name, result.model_version,
+            result.dimensions, result.chunk_count, result.embedded_count,
+            result.updated_count, result.reused_count,
+        )
+        print(
+            f"{result.sha256[:12]:12s} model={result.model_name} "
+            f"v{result.model_version} dims={result.dimensions:<4d} "
+            f"chunks={result.chunk_count:<4d} embedded={result.embedded_count:<4d} "
+            f"updated={result.updated_count:<3d} reused={result.reused_count:<3d}  "
+            f"{result.error or result.report_path}"
+        )
+    return 0
+
+
 def cmd_search(
     query: str,
     *,
@@ -1006,6 +1092,7 @@ __all__ = [
     "cmd_structure_review",
     "cmd_chunk_run",
     "cmd_index_run",
+    "cmd_embed_run",
     "cmd_search",
     "cmd_version",
 ]
