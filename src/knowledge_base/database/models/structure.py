@@ -14,16 +14,22 @@ from sqlalchemy import ForeignKey, Index, Integer, String, Text, UniqueConstrain
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from knowledge_base.database.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, make_enum
-from knowledge_base.database.enums import BlockType, ContentStatus
+from knowledge_base.database.enums import BlockType, ChapterKind, ContentStatus
 
 if TYPE_CHECKING:
     from knowledge_base.database.models.books import Book
+    from knowledge_base.database.models.normalization import NormalizedText
     from knowledge_base.database.models.search import SearchDocument
     from knowledge_base.database.models.sources import SourceFile
 
 
 class Chapter(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    """A chapter of a book."""
+    """A top-level container of a book.
+
+    ``kind`` distinguishes real chapters from structural regions the detector
+    identifies (front matter, table of contents, appendix) so body text is
+    never mistaken for them while provenance is still preserved.
+    """
 
     __tablename__ = "chapters"
     __table_args__ = (
@@ -36,6 +42,9 @@ class Chapter(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     number: Mapped[int] = mapped_column(Integer, nullable=False)
     title: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[ChapterKind] = mapped_column(
+        make_enum(ChapterKind), nullable=False, default=ChapterKind.CHAPTER
+    )
     source_file_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("source_files.id"), nullable=False
     )
@@ -74,9 +83,42 @@ class Section(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     book: Mapped[Book] = relationship(back_populates="sections")
     chapter: Mapped[Chapter] = relationship(back_populates="sections")
     source_file: Mapped[SourceFile] = relationship()
+    subsections: Mapped[list[Subsection]] = relationship(
+        back_populates="section", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<Section {self.number} {self.title!r}>"
+
+
+class Subsection(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """A subsection nested under a section."""
+
+    __tablename__ = "subsections"
+    __table_args__ = (
+        UniqueConstraint("section_id", "number", name="uq_subsections_section_number"),
+        Index("ix_subsections_book_id", "book_id"),
+        Index("ix_subsections_section_id", "section_id"),
+    )
+
+    book_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("books.id"), nullable=False
+    )
+    section_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("sections.id"), nullable=False
+    )
+    number: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    source_file_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("source_files.id"), nullable=False
+    )
+
+    book: Mapped[Book] = relationship(back_populates="subsections")
+    section: Mapped[Section] = relationship(back_populates="subsections")
+    source_file: Mapped[SourceFile] = relationship()
+
+    def __repr__(self) -> str:
+        return f"<Subsection {self.number} {self.title!r}>"
 
 
 class Page(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -158,6 +200,9 @@ class ContentBlock(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     section_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("sections.id"), nullable=True
     )
+    subsection_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("subsections.id"), nullable=True
+    )
     source_file_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("source_files.id"), nullable=False
     )
@@ -167,13 +212,18 @@ class ContentBlock(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     status: Mapped[ContentStatus] = mapped_column(
         make_enum(ContentStatus), nullable=False, default=ContentStatus.PENDING
     )
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     book: Mapped[Book] = relationship(back_populates="content_blocks")
     page: Mapped[Page | None] = relationship(back_populates="content_blocks")
     chapter: Mapped[Chapter | None] = relationship()
     section: Mapped[Section | None] = relationship()
+    subsection: Mapped[Subsection | None] = relationship()
     source_file: Mapped[SourceFile] = relationship()
     chunks: Mapped[list[ContentChunk]] = relationship(
+        back_populates="content_block", cascade="all, delete-orphan"
+    )
+    normalization: Mapped[NormalizedText | None] = relationship(
         back_populates="content_block", cascade="all, delete-orphan"
     )
 

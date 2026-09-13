@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from knowledge_base import __version__
 from knowledge_base.config import Settings, get_settings
@@ -15,6 +16,11 @@ from knowledge_base.normalization import (
     search_config,
     write_report,
 )
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
+    from knowledge_base.database.models.sources import SourceFile
 
 
 def _settings() -> Settings:
@@ -84,6 +90,64 @@ def cmd_normalize(file: Path, config_name: str) -> int:
     print(f"unchanged: {result.unchanged}")
     print(f"protected: {result.stats.protected}")
     print(f"report:    {json_path}")
+    return 0
+
+
+def cmd_normalize_run(
+    sha256: str | None,
+    *,
+    normalize_all_: bool = False,
+    limit: int | None = None,
+    config_name: str = "auto",
+) -> int:
+    """Derive (and persist) search-normalized text for a book's content blocks."""
+    from knowledge_base.database import create_app_engine, make_session_factory, session_scope
+    from knowledge_base.logging import logger
+    from knowledge_base.pipeline.normalize.processor import (
+        normalize_all,
+        normalize_book,
+    )
+
+    settings = _settings()
+    engine = create_app_engine(settings.database_url)
+    factory = make_session_factory(engine)
+    with session_scope(factory) as session:
+        if sha256:
+            book = _find_book(session, sha256)
+            if book is None:
+                print(f"No published book matching sha256 prefix {sha256!r}", file=sys.stderr)
+                return 1
+            results = [
+                normalize_book(
+                    book,
+                    session=session,
+                    data_dir=settings.data_dir,
+                    config_name=config_name,
+                )
+            ]
+        elif normalize_all_:
+            results = normalize_all(
+                session, settings=settings, config_name=config_name, limit=limit
+            )
+        else:
+            print("Use --sha256 <prefix> or --all", file=sys.stderr)
+            return 2
+
+    for result in results:
+        logger.info(
+            "normalize {} lang={} config={} total={} normalized={} skipped={} "
+            "protected={} changed={} unchanged={}",
+            result.sha256[:12], result.language.value, result.config_name,
+            result.blocks_total, result.blocks_normalized, result.blocks_skipped,
+            result.blocks_protected, result.changed, result.unchanged,
+        )
+        print(
+            f"{result.sha256[:12]:12s} lang={result.language.value:3s} "
+            f"config={result.config_name:12s} total={result.blocks_total:<4d} "
+            f"normalized={result.blocks_normalized:<4d} skipped={result.blocks_skipped:<3d} "
+            f"protected={result.blocks_protected:<3d} changed={result.changed:<4d} "
+            f"unchanged={result.unchanged}  {result.error or result.report_path}"
+        )
     return 0
 
 
@@ -227,12 +291,564 @@ def cmd_extract(
     return 0
 
 
+def cmd_ocr(
+    sha256: str | None,
+    *,
+    ocr_all: bool = False,
+    limit: int | None = None,
+    force: bool = False,
+    engine: str | None = None,
+    dpi: int | None = None,
+    languages: str | None = None,
+) -> int:
+    """OCR every page that needs it and record results + review flags."""
+    from sqlalchemy import select
+
+    from knowledge_base.database import create_app_engine, make_session_factory, session_scope
+    from knowledge_base.database.models.sources import SourceFile
+    from knowledge_base.logging import logger
+    from knowledge_base.pipeline.ocr.config import OcrConfig
+    from knowledge_base.pipeline.ocr.engines import OcrEngineUnavailable, build_engine
+    from knowledge_base.pipeline.ocr.processor import ocr_all as run_all
+    from knowledge_base.pipeline.ocr.processor import ocr_file
+
+    settings = _settings()
+    engine_name = engine or "tesseract"
+    config = OcrConfig(
+        engine=engine_name,
+        dpi=dpi or 300,
+        languages=tuple(languages.split(",")) if languages else ("ar",),
+    )
+    try:
+        backend = build_engine(engine_name, config)
+    except OcrEngineUnavailable as exc:
+        print(f"OCR engine unavailable: {exc}", file=sys.stderr)
+        return 3
+
+    kb_engine = create_app_engine(settings.database_url)
+    factory = make_session_factory(kb_engine)
+
+    with session_scope(factory) as session:
+        if sha256:
+            source = session.scalar(
+                select(SourceFile).where(SourceFile.sha256.startswith(sha256))
+            )
+            if source is None:
+                print(f"No source matching sha256 prefix {sha256!r}", file=sys.stderr)
+                return 1
+            results = [
+                ocr_file(
+                    source,
+                    session=session,
+                    engine=backend,
+                    config=config,
+                    data_dir=settings.data_dir,
+                    force=force,
+                )
+            ]
+        elif ocr_all:
+            results = run_all(
+                session, settings=settings, engine=backend, config=config, limit=limit, force=force
+            )
+        else:
+            print("Use --sha256 <prefix> or --all", file=sys.stderr)
+            return 2
+
+    for result in results:
+        conf = f"{result.avg_confidence:.1f}" if result.avg_confidence is not None else "-"
+        logger.info(
+            "ocr {} engine={} ocr={} review={} failed={} conf={}",
+            result.sha256[:12], result.engine, result.pages_ocr,
+            result.pages_review, result.pages_failed, conf,
+        )
+        print(
+            f"{result.sha256[:12]:12s} engine={result.engine:<9s} "
+            f"ocr={result.pages_ocr:<4d} review={result.pages_review:<4d} "
+            f"failed={result.pages_failed:<3d} conf={conf:<6s}  "
+            f"{result.error or result.output_dir}"
+        )
+    return 0
+
+
+def cmd_metadata_extract(
+    sha256: str | None,
+    *,
+    metadata_all: bool = False,
+    limit: int | None = None,
+    pages: int | None = None,
+    use_filename: bool = True,
+    user_json: Path | None = None,
+) -> int:
+    """Extract metadata candidates and write the merge report per source."""
+    from sqlalchemy import select
+
+    from knowledge_base.database import create_app_engine, make_session_factory, session_scope
+    from knowledge_base.database.models.sources import SourceFile
+    from knowledge_base.logging import logger
+    from knowledge_base.pipeline.metadata.config import MetadataConfig
+    from knowledge_base.pipeline.metadata.processor import extract_metadata, extract_metadata_all
+
+    settings = _settings()
+    engine = create_app_engine(settings.database_url)
+    factory = make_session_factory(engine)
+    config = MetadataConfig(
+        scan_first_pages=pages if pages and pages > 0 else 5,
+        use_filename=use_filename,
+    )
+    try:
+        user_items = _load_user_items(user_json)
+    except ValueError as exc:
+        print(f"cannot load user metadata: {exc}", file=sys.stderr)
+        return 1
+
+    with session_scope(factory) as session:
+        if sha256:
+            source = session.scalar(
+                select(SourceFile).where(SourceFile.sha256.startswith(sha256))
+            )
+            if source is None:
+                print(f"No source matching sha256 prefix {sha256!r}", file=sys.stderr)
+                return 1
+            results = [
+                extract_metadata(
+                    source,
+                    session=session,
+                    config=config,
+                    data_dir=settings.data_dir,
+                    user_items=user_items,
+                )
+            ]
+        elif metadata_all:
+            results = extract_metadata_all(
+                session,
+                settings=settings,
+                config=config,
+                limit=limit,
+                user_items=user_items,
+            )
+        else:
+            print("Use --sha256 <prefix> or --all", file=sys.stderr)
+            return 2
+
+    for result in results:
+        overall = result.overall_confidence or "none"
+        logger.info(
+            "metadata {} fields={} conf={} review={}",
+            result.sha256[:12], len(result.fields_found), overall, result.review_needed,
+        )
+        print(
+            f"{result.sha256[:12]:12s} fields={len(result.fields_found):<2d} "
+            f"conf={overall:<6s} review={result.review_needed}  "
+            f"{result.error or result.summary_path}"
+        )
+    return 0
+
+
+def cmd_metadata_show(sha256: str) -> int:
+    """Print the merged best-guess metadata for one source."""
+    from sqlalchemy import select
+
+    from knowledge_base.database import create_app_engine, make_session_factory, session_scope
+    from knowledge_base.database.enums import MetadataField
+    from knowledge_base.database.models.metadata import MetadataCandidate
+    from knowledge_base.database.models.sources import SourceFile
+    from knowledge_base.pipeline.metadata.config import DEFAULT_METADATA_CONFIG
+    from knowledge_base.pipeline.metadata.processor import (
+        merge_candidates,
+        overall_confidence,
+        render_report_text,
+    )
+
+    settings = _settings()
+    engine = create_app_engine(settings.database_url)
+    factory = make_session_factory(engine)
+    with session_scope(factory) as session:
+        source = session.scalar(
+            select(SourceFile).where(SourceFile.sha256.startswith(sha256))
+        )
+        if source is None:
+            print(f"No source matching sha256 prefix {sha256!r}", file=sys.stderr)
+            return 1
+        rows = session.scalars(
+            select(MetadataCandidate).where(
+                MetadataCandidate.source_file_id == source.id
+            )
+        ).all()
+        best = merge_candidates(list(rows), DEFAULT_METADATA_CONFIG)
+        overall = overall_confidence(best)
+        missing = [f for f in MetadataField if f not in best]
+        print(
+            render_report_text(
+                source.file_path.split("/")[-1],
+                best,
+                overall,
+                missing,
+                None,
+            )
+        )
+    return 0
+
+
+def cmd_metadata_review(
+    sha256: str,
+    *,
+    approve: str | None,
+    reject: str | None,
+    value: str | None,
+    note: str | None,
+    reviewer: str,
+    publish: bool,
+) -> int:
+    """List candidates, apply review actions, and optionally publish."""
+    from sqlalchemy import select
+
+    from knowledge_base.database import create_app_engine, make_session_factory, session_scope
+    from knowledge_base.database.models.sources import SourceFile
+    from knowledge_base.logging import logger
+    from knowledge_base.pipeline.metadata.processor import apply_review, publish_metadata
+
+    settings = _settings()
+    engine = create_app_engine(settings.database_url)
+    factory = make_session_factory(engine)
+
+    with session_scope(factory) as session:
+        source = session.scalar(
+            select(SourceFile).where(SourceFile.sha256.startswith(sha256))
+        )
+        if source is None:
+            print(f"No source matching sha256 prefix {sha256!r}", file=sys.stderr)
+            return 1
+
+        if approve is None and reject is None and not publish:
+            _print_candidates(session, source)
+            return 0
+
+        if approve:
+            target, error = apply_review(
+                session,
+                source,
+                approve,
+                approve=True,
+                value=value,
+                note=note,
+                reviewer=reviewer,
+            )
+            if error:
+                print(f"approve failed: {error}", file=sys.stderr)
+                return 1
+            assert target is not None
+            logger.info(
+                "approved metadata {} field={} value={}",
+                source.sha256[:12], approve, target.value,
+            )
+            print(f"approved {target.field.value}: {target.value}")
+        if reject:
+            target, error = apply_review(
+                session,
+                source,
+                reject,
+                reject=True,
+                note=note,
+                reviewer=reviewer,
+            )
+            if error:
+                print(f"reject failed: {error}", file=sys.stderr)
+                return 1
+            assert target is not None
+            logger.info("rejected metadata {} field={}", source.sha256[:12], reject)
+            print(f"rejected {target.field.value}: {target.value}")
+        if publish:
+            result = publish_metadata(session, source, reviewer=reviewer)
+            if result.errors:
+                for err in result.errors:
+                    print(f"publish error: {err}", file=sys.stderr)
+                return 1
+            logger.info(
+                "published metadata {} book={} edition={}",
+                source.sha256[:12], result.book_id, result.edition_id,
+            )
+            print(
+                f"published book={result.book_id} edition={result.edition_id} "
+                f"created_book={result.created_book} created_edition={result.created_edition} "
+                f"fields={result.fields}"
+            )
+    return 0
+
+
+def _print_candidates(session: Session, source: SourceFile) -> None:
+    from sqlalchemy import select
+
+    from knowledge_base.database.models.metadata import MetadataCandidate
+
+    rows = session.scalars(
+        select(MetadataCandidate).where(MetadataCandidate.source_file_id == source.id)
+        .order_by(MetadataCandidate.field, MetadataCandidate.created_at)
+    ).all()
+    if not rows:
+        message = (
+            "no metadata candidates yet — run "
+            "'knowledge-base metadata extract --sha256 <prefix>'"
+        )
+        print(message)
+        return
+    print(f"Candidates for {source.sha256[:12]} ({source.file_path.split('/')[-1]}):")
+    for candidate in rows:
+        flags = [
+            candidate.confidence.value,
+            candidate.source.value,
+            candidate.status.value,
+        ]
+        if candidate.uncertain:
+            flags.append("uncertain")
+        print(
+            f"  {candidate.field.value:<18s} {candidate.value!r:<60s} "
+            f"[{', '.join(flags)}]{'  ' + candidate.evidence if candidate.evidence else ''}"
+        )
+
+
+def _find_book(session: Session, sha256: str) -> Any:
+    """Published Book whose source file matches a sha256 prefix."""
+    from sqlalchemy import select
+
+    from knowledge_base.database.models.books import Book
+    from knowledge_base.database.models.sources import SourceFile
+
+    return session.scalar(
+        select(Book)
+        .join(SourceFile, Book.source_file_id == SourceFile.id)
+        .where(SourceFile.sha256.startswith(sha256))
+    )
+
+
+def cmd_structure_detect(
+    sha256: str | None,
+    *,
+    structure_all: bool = False,
+    limit: int | None = None,
+) -> int:
+    """Detect book structure from extraction output (idempotent per book)."""
+    from knowledge_base.database import create_app_engine, make_session_factory, session_scope
+    from knowledge_base.logging import logger
+    from knowledge_base.pipeline.structure.processor import (
+        detect_structure,
+        detect_structure_all,
+    )
+
+    settings = _settings()
+    engine = create_app_engine(settings.database_url)
+    factory = make_session_factory(engine)
+    with session_scope(factory) as session:
+        if sha256:
+            book = _find_book(session, sha256)
+            if book is None:
+                print(f"No published book matching sha256 prefix {sha256!r}", file=sys.stderr)
+                return 1
+            results = [detect_structure(book, session=session, data_dir=settings.data_dir)]
+        elif structure_all:
+            results = detect_structure_all(session, settings=settings, limit=limit)
+        else:
+            print("Use --sha256 <prefix> or --all", file=sys.stderr)
+            return 2
+
+    for result in results:
+        logger.info(
+            "structure {} chapters={} sections={} subsections={} blocks={} flagged={}",
+            result.sha256[:12], len(result.chapters), result.section_count,
+            result.subsection_count, result.block_count, result.flagged_count,
+        )
+        print(
+            f"{result.sha256[:12]:12s} pages={result.pages_with_text:<4d} "
+            f"chapters={len(result.chapters):<3d} sections={result.section_count:<3d} "
+            f"subsections={result.subsection_count:<3d} blocks={result.block_count:<4d} "
+            f"flagged={result.flagged_count}  {result.error or result.report_path}"
+        )
+    return 0
+
+
+def cmd_structure_show(sha256: str) -> int:
+    """Print the detected structure of one book from the database."""
+    from sqlalchemy import func, select
+
+    from knowledge_base.database import create_app_engine, make_session_factory, session_scope
+    from knowledge_base.database.enums import ContentStatus
+    from knowledge_base.database.models.structure import (
+        Chapter,
+        ContentBlock,
+        Page,
+        Paragraph,
+        Section,
+        Subsection,
+    )
+
+    settings = _settings()
+    engine = create_app_engine(settings.database_url)
+    factory = make_session_factory(engine)
+    with session_scope(factory) as session:
+        book = _find_book(session, sha256)
+        if book is None:
+            print(f"No published book matching sha256 prefix {sha256!r}", file=sys.stderr)
+            return 1
+        chapters = session.scalars(
+            select(Chapter).where(Chapter.book_id == book.id).order_by(Chapter.number)
+        ).all()
+        sections = session.scalars(
+            select(Section).where(Section.book_id == book.id).order_by(Section.number)
+        ).all()
+        subsections = session.scalars(
+            select(Subsection).where(Subsection.book_id == book.id).order_by(Subsection.number)
+        ).all()
+        page_count = session.scalar(
+            select(func.count()).select_from(Page).where(Page.book_id == book.id)
+        ) or 0
+        paragraph_count = session.scalar(
+            select(func.count()).select_from(Paragraph).where(Paragraph.book_id == book.id)
+        ) or 0
+        flagged = session.scalars(
+            select(ContentBlock)
+            .where(ContentBlock.book_id == book.id, ContentBlock.status == ContentStatus.REVIEW)
+            .order_by(ContentBlock.page_id, ContentBlock.sequence)
+        ).all()
+
+        print(f"Book: {book.title}  ({book.id})")
+        print(f"Pages: {page_count}  paragraphs: {paragraph_count}")
+        for chapter in chapters:
+            print(f"  {chapter.number:>3d} {chapter.kind.value:<18s} {chapter.title}")
+            for section in sections:
+                if section.chapter_id == chapter.id:
+                    print(f"        {section.number:>3d} section  {section.title}")
+            for subsection in subsections:
+                for section in sections:
+                    if subsection.section_id == section.id and section.chapter_id == chapter.id:
+                        label = f"{subsection.number:>3d} subsection  {subsection.title}"
+                        print(f"              {label}")
+        print(f"Flagged for review: {len(flagged)}")
+        for block in flagged:
+            text = block.original_text.replace("\n", " ")
+            if len(text) > 60:
+                text = text[:60] + "…"
+            print(f"  p.{block.page_number} seq={block.sequence} {text}")
+            if block.notes:
+                print(f"    note: {block.notes}")
+    return 0
+
+
+def cmd_structure_review(
+    sha256: str,
+    *,
+    list_blocks: bool = False,
+    approve: str | None = None,
+    reject: str | None = None,
+    note: str | None = None,
+    reviewer: str = "cli",
+) -> int:
+    """List blocks flagged for review and approve / reject them."""
+    from sqlalchemy import select
+
+    from knowledge_base.database import create_app_engine, make_session_factory, session_scope
+    from knowledge_base.database.enums import ContentStatus
+    from knowledge_base.database.models.structure import ContentBlock, Page
+    from knowledge_base.logging import logger
+
+    settings = _settings()
+    engine = create_app_engine(settings.database_url)
+    factory = make_session_factory(engine)
+
+    def _parse_key(key: str) -> tuple[int, int]:
+        parts = key.split(":")
+        if len(parts) != 2:
+            raise ValueError("expected PAGE:SEQ, e.g. 3:12")
+        return int(parts[0]), int(parts[1])
+
+    with session_scope(factory) as session:
+        book = _find_book(session, sha256)
+        if book is None:
+            print(f"No published book matching sha256 prefix {sha256!r}", file=sys.stderr)
+            return 1
+
+        flagged = session.scalars(
+            select(ContentBlock)
+            .where(ContentBlock.book_id == book.id, ContentBlock.status == ContentStatus.REVIEW)
+            .order_by(ContentBlock.page_id, ContentBlock.sequence)
+        ).all()
+        if list_blocks or (approve is None and reject is None):
+            if not flagged:
+                print(f"No blocks flagged for review for {sha256[:12]}")
+            else:
+                print(f"Flagged blocks for {book.title} ({len(flagged)}):")
+                for flagged_block in flagged:
+                    text = flagged_block.original_text.replace("\n", " ")
+                    if len(text) > 60:
+                        text = text[:60] + "…"
+                    print(f"  p.{flagged_block.page_number} seq={flagged_block.sequence}: {text}")
+                    if flagged_block.notes:
+                        print(f"      note: {flagged_block.notes}")
+            if approve is None and reject is None:
+                return 0
+
+        try:
+            target_key = approve or reject
+            page_no, seq = _parse_key(target_key or "")
+        except ValueError as exc:
+            print(f"{exc}", file=sys.stderr)
+            return 2
+
+        target = session.scalar(
+            select(ContentBlock)
+            .join(Page, ContentBlock.page_id == Page.id)
+            .where(
+                ContentBlock.book_id == book.id,
+                Page.page_number == page_no,
+                ContentBlock.sequence == seq,
+            )
+        )
+        if target is None:
+            print(f"No block at p.{page_no} seq={seq}", file=sys.stderr)
+            return 1
+
+        if approve:
+            target.status = ContentStatus.PUBLISHED
+            action = "approved"
+        else:
+            target.status = ContentStatus.QUARANTINED
+            action = "rejected"
+        annotation = note or f"{action} by {reviewer}"
+        target.notes = f"{target.notes + '; ' if target.notes else ''}{annotation}".strip()
+        logger.info(
+            "structure review {} p.{} seq={} -> {}",
+            sha256[:12], page_no, seq, target.status.value,
+        )
+        print(f"{action} p.{page_no} seq={seq} ({target.original_text[:40]!r})")
+    return 0
+
+
+def _load_user_items(path: Path | None) -> list[tuple[str, str]] | None:
+    if path is None:
+        return None
+    import json as _json
+
+    if not path.is_file():
+        raise ValueError(f"user metadata file not found: {path}")
+    data = _json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(data, dict):
+        return [(str(k), str(v)) for k, v in data.items()]
+    if isinstance(data, list):
+        return [(str(d["field"]), str(d.get("value", ""))) for d in data]
+    raise ValueError("user metadata json must be an object or a list of {field, value}")
+
+
 __all__ = [
     "cmd_env",
     "cmd_glob",
     "cmd_ingest",
     "cmd_inspect",
     "cmd_extract",
+    "cmd_ocr",
+    "cmd_metadata_extract",
+    "cmd_metadata_show",
+    "cmd_metadata_review",
     "cmd_normalize",
+    "cmd_structure_detect",
+    "cmd_structure_show",
+    "cmd_structure_review",
     "cmd_version",
 ]

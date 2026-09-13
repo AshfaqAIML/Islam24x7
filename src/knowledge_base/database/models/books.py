@@ -16,6 +16,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from knowledge_base.database.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 if TYPE_CHECKING:
+    from knowledge_base.database.models.normalization import NormalizedText
     from knowledge_base.database.models.sources import SourceEdition, SourceFile
     from knowledge_base.database.models.structure import (
         Chapter,
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
         Page,
         Paragraph,
         Section,
+        Subsection,
     )
 
 
@@ -166,6 +168,9 @@ class Book(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     sections: Mapped[list[Section]] = relationship(
         back_populates="book", cascade="all, delete-orphan"
     )
+    subsections: Mapped[list[Subsection]] = relationship(
+        back_populates="book", cascade="all, delete-orphan"
+    )
     pages: Mapped[list[Page]] = relationship(back_populates="book", cascade="all, delete-orphan")
     paragraphs: Mapped[list[Paragraph]] = relationship(
         back_populates="book", cascade="all, delete-orphan"
@@ -174,6 +179,9 @@ class Book(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         back_populates="book", cascade="all, delete-orphan"
     )
     content_chunks: Mapped[list[ContentChunk]] = relationship(
+        back_populates="book", cascade="all, delete-orphan"
+    )
+    normalizations: Mapped[list[NormalizedText]] = relationship(
         back_populates="book", cascade="all, delete-orphan"
     )
 

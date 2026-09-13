@@ -18,7 +18,7 @@ sources        source_files → source_editions → books
                  ├── licenses
                  └── processing_jobs
 books          categories / authors / publishers / translators / topics
-structure      books → chapters → sections
+structure      books → chapters (kind) → sections → subsections
                  └─ pages → paragraphs → content_blocks → content_chunks
 quran          surahs → ayahs → ayah_translations
 hadith         hadith_collections → hadith_books/hadith_chapters → hadiths
@@ -59,6 +59,42 @@ Idempotent stage tracking. `UNIQUE (source_file_id, job_type)` makes each
 pipeline stage a single record per file (re-run replaces in place).
 `job_type` enum `kb_jobtype`, `status` enum `kb_jobstatus`, `manifest` JSONB.
 
+### `ocr_pages`
+Per-page OCR output for scanned and mixed PDFs (migration
+`75a57d77d004_add_ocr_results`). One row per `(source_file_id, page_number)`:
+
+| Column | Type | Note |
+| ------ | ---- | ---- |
+| `engine` | `text` | engine used, e.g. `tesseract` / `easyocr` / `dummy` |
+| `engine_version` | `text` | nullable engine version string |
+| `languages` | `text` | comma-joined training languages |
+| `status` | enum `kb_ocrstatus` | `ok` / `review` / `failed` |
+| `confidence` | `float` | nullable per-page engine confidence |
+| `text_chars` | `int` | recognized text length |
+| `quality_notes` | `text` | comma-joined review flags, e.g. `low_confidence` |
+| `text_path` / `image_path` | `text` | relative paths under `data/processed/ocr/<sha>/` |
+
+### `metadata_candidates`
+Extracted-but-unverified book metadata (migration
+`44d8e71f7328_add_metadata_candidates`). One row per distinct
+`(source_file_id, field, source, value)` — the dedupe key repeats on every
+extraction so review decisions survive re-runs. Never imported into
+`books`/`source_editions` without an explicit human `approve` + `publish`.
+
+| Column | Type | Note |
+| ------ | ---- | ---- |
+| `field` | enum `kb_metadatafield` | `title`, `subtitle`, `author`, `translator`, `editor`, `publisher`, `publication_year`, `edition`, `language`, `isbn`, `category`, `description`, `page_count` |
+| `value` | `text` | candidate value (verbatim, cleaned) |
+| `confidence` | enum `kb_metadataconfidence` | `high` / `medium` / `low` |
+| `uncertain` | `bool` | flagged for human review; uncertain candidates are never auto-published |
+| `source` | enum `kb_metadatasource` | `pdf_metadata` / `filename` / `first_pages` / `title_page` / `user_provided` |
+| `evidence` | `text` | where the value came from (page/line, marker, method) |
+| `status` | enum `kb_metadatareviewstatus` | `pending` / `review` / `approved` / `rejected` |
+| `review_note` / `reviewed_at` / `reviewed_by` | — | human review audit trail |
+
+`user_provided` candidates are written as `approved` (reviewed_by `operator`)
+but still require the `publish` step. See `docs/metadata.md` for the flow.
+
 ## Books domain
 
 | Table | Notable columns |
@@ -76,14 +112,22 @@ Every `book` resolves bidirectionally to its raw source file
 
 ## Structure domain (book internals)
 
+Migration `f7e2c9a1b3d4_add_structure_detection`.
+
 | Table | Notable columns / constraints |
 | ----- | ----------------------------- |
-| `chapters` | `UNIQUE (book_id, number)`; → `book`, `source_file` |
+| `chapters` | `UNIQUE (book_id, number)`; `kind` enum `kb_chapterkind` (`chapter` / `front_matter` / `table_of_contents` / `appendix`) → `book`, `source_file` |
 | `sections` | `UNIQUE (chapter_id, number)`; also → `book`, `source_file` |
+| `subsections` | `UNIQUE (section_id, number)`; → `book`, `section`, `source_file` |
 | `pages` | `UNIQUE (book_id, page_number)`; → `book`, `source_file`; `has_text` bool |
 | `paragraphs` | `UNIQUE (book_id, page_id, sequence)`; keeps original pre-normalization text |
-| `content_blocks` | typed element: `block_type` enum `kb_blocktype`, `sequence`, `original_text`, `status` enum `kb_contentstatus`; optional → `page`/`chapter`/`section`; `UNIQUE (book_id, page_id, sequence)` |
+| `content_blocks` | typed element: `block_type` enum `kb_blocktype`, `sequence`, `original_text`, `status` enum `kb_contentstatus`, nullable `notes`; optional FKs → `page`/`chapter`/`section`/`subsection`; `UNIQUE (book_id, page_id, sequence)` |
 | `content_chunks` | `chunk_id` `UNIQUE` (stable: `sha256:page:seq`), `UNIQUE (content_block_id, sequence)`; `page_number` cached on the chunk |
+
+`chapters.kind` distinguishes real content from identified structural regions
+so body text is never mistaken for them in search; `block_type` now also
+includes `page_number`, `front_matter`, `toc_entry`, and `reference` beyond
+the prose/heading/footnote/verse/hadith types.
 
 `original_text` on blocks/chunks is guaranteed verbatim source text; the
 *search/normalized* variant lives only in `search_documents.body_text`.
@@ -122,13 +166,26 @@ display-level rows (e.g. whole surah / hadith translation) via `document_type`.
 The fixed 768-dimensional base column allows the HNSW index; a production
 pipeline with a differently-dimensioned model can add a migration.
 
+## Normalization domain
+
+`normalized_texts` — one **search-normalized variant** per content block;
+`UNIQUE (content_block_id)`. `original_text` is never written or updated here;
+each row carries `original_sha256` (hash of the source `content_blocks.original_text`)
+so the pairing is verifiable. `language` (`kb_language`), `config_name`
+(`auto`/`conservative`/`search`/`urdu`), `normalized_text`, `protected`
+(religious content marker present — variant kept byte-identical), `stats`
+JSONB. `content_block_id` FK is `ON DELETE CASCADE`, so re-running structure
+detection cleans stale variants automatically. `ProcessingJob(job_type=NORMALIZE)`
+records each run.
+
 ## Provenance guarantee
 
 Every leaf table (page, paragraph, block, chunk, ayah, hadith) carries
 `source_file_id`; every intermediate object carries `book_id`/page/chapter
 refs. Deleting a `source_files` row cascades to its editions, jobs, and
 licenses; deleting a `books` row cascades to its chapters/pages/blocks/chunks
-via ORM-level `cascade="all, delete-orphan"`.
+via ORM-level `cascade="all, delete-orphan"`, and a `content_block` delete
+cascades to its `normalized_texts` row via DB-level `ON DELETE CASCADE`.
 
 ## Development commands
 

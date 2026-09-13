@@ -26,6 +26,8 @@ from knowledge_base.database.enums import (
 
 if TYPE_CHECKING:
     from knowledge_base.database.models.books import Book
+    from knowledge_base.database.models.metadata import MetadataCandidate
+    from knowledge_base.database.models.ocr import OcrPage
     from knowledge_base.database.models.structure import ContentChunk, Page
 
 
@@ -59,6 +61,12 @@ class SourceFile(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         back_populates="source_file", cascade="all, delete-orphan"
     )
     jobs: Mapped[list[ProcessingJob]] = relationship(
+        back_populates="source_file", cascade="all, delete-orphan"
+    )
+    ocr_pages: Mapped[list[OcrPage]] = relationship(
+        back_populates="source_file", cascade="all, delete-orphan"
+    )
+    metadata_candidates: Mapped[list[MetadataCandidate]] = relationship(
         back_populates="source_file", cascade="all, delete-orphan"
     )
     pages: Mapped[list[Page]] = relationship(back_populates="source_file")

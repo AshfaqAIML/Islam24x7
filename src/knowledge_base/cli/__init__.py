@@ -45,14 +45,38 @@ def _build_parser() -> argparse.ArgumentParser:
 
     norm = sub.add_parser(
         "normalize",
+        help="Normalize text: file utility or pipeline run for a published book",
+    )
+    n_sub = norm.add_subparsers(dest="normalize_command", required=True)
+
+    n_file = n_sub.add_parser(
+        "file",
         help="Normalize a plain-text file and write a report under data/processed/normalized",
     )
-    norm.add_argument("file", type=Path, help="path to a source text file")
-    norm.add_argument(
+    n_file.add_argument("file", type=Path, help="path to a source text file")
+    n_file.add_argument(
         "--config",
         choices=["conservative", "search"],
         default="search",
         help="normalization configuration to apply (default: search)",
+    )
+
+    n_run = n_sub.add_parser(
+        "run",
+        help="Derive search-normalized text for a published book's content blocks",
+    )
+    n_run.add_argument("--sha256", help="normalize one book by source sha256 prefix")
+    n_run.add_argument(
+        "--all", dest="norm_all", action="store_true", help="normalize all published books"
+    )
+    n_run.add_argument(
+        "--limit", type=int, default=None, help="cap the number of books with --all"
+    )
+    n_run.add_argument(
+        "--config",
+        choices=["auto", "conservative", "search"],
+        default="auto",
+        help="config override (default: auto per book language)",
     )
 
     ingest = sub.add_parser(
@@ -98,6 +122,121 @@ def _build_parser() -> argparse.ArgumentParser:
         "--force", action="store_true", help="extract scanned sources too (empty pages)"
     )
 
+    ocr = sub.add_parser(
+        "ocr",
+        help="OCR scanned pages; record engine, confidence, and review flags",
+    )
+    ocr.add_argument("--sha256", help="ocr one source by sha256 prefix")
+    ocr.add_argument("--all", dest="ocr_all", action="store_true", help="ocr all sources")
+    ocr.add_argument("--limit", type=int, default=None, help="cap the number of files with --all")
+    ocr.add_argument("--force", action="store_true", help="re-OCR pages already processed")
+    ocr.add_argument("--engine", default=None, help="tesseract | easyocr | dummy")
+    ocr.add_argument("--dpi", type=int, default=None, help="render resolution (default 300)")
+    ocr.add_argument("--languages", default=None, help="comma list, e.g. ar,ur or en,ar")
+
+    meta = sub.add_parser(
+        "metadata",
+        help="Extract, review, and publish book metadata candidates",
+    )
+    meta_sub = meta.add_subparsers(dest="meta_command", required=True)
+
+    meta_extract = meta_sub.add_parser(
+        "extract",
+        help="Extract metadata candidates from registered sources",
+    )
+    meta_extract.add_argument("--sha256", help="extract one source by sha256 prefix")
+    meta_extract.add_argument(
+        "--all", dest="meta_all", action="store_true", help="extract for all sources"
+    )
+    meta_extract.add_argument(
+        "--limit", type=int, default=None, help="cap the number of files with --all"
+    )
+    meta_extract.add_argument(
+        "--pages", type=int, default=None, help="how many leading pages to scan (default 5)"
+    )
+    meta_extract.add_argument(
+        "--no-filename",
+        action="store_true",
+        help="do not seed low-confidence title guesses from filenames",
+    )
+    meta_extract.add_argument(
+        "--user-json",
+        type=Path,
+        default=None,
+        help="json file of explicit field values: {\"title\": \"...\", ...}",
+    )
+
+    meta_show = meta_sub.add_parser(
+        "show",
+        help="Show the merged best-guess metadata for a source",
+    )
+    meta_show.add_argument("--sha256", required=True, help="source sha256 prefix")
+
+    meta_review = meta_sub.add_parser(
+        "review",
+        help="List / approve / reject metadata candidates, then publish approved",
+    )
+    meta_review.add_argument("--sha256", required=True, help="source sha256 prefix")
+    meta_review.add_argument("--approve", help="field to approve (e.g. title, author)")
+    meta_review.add_argument(
+        "--reject", help="field whose best candidate should be rejected"
+    )
+    meta_review.add_argument(
+        "--value", help="corrected value to use when approving a field"
+    )
+    meta_review.add_argument("--note", help="review note")
+    meta_review.add_argument(
+        "--reviewer", default="cli", help="human identity recording this review"
+    )
+    meta_review.add_argument(
+        "--publish",
+        action="store_true",
+        help="materialize approved fields into source_editions + books",
+    )
+
+    structure = sub.add_parser(
+        "structure",
+        help="Detect, inspect, and review book structure",
+    )
+    str_sub = structure.add_subparsers(dest="structure_command", required=True)
+
+    str_detect = str_sub.add_parser(
+        "detect",
+        help="Detect structure for a published book's extraction output",
+    )
+    str_detect.add_argument("--sha256", help="detect one book by source sha256 prefix")
+    str_detect.add_argument(
+        "--all", dest="str_all", action="store_true", help="detect for all published books"
+    )
+    str_detect.add_argument(
+        "--limit", type=int, default=None, help="cap the number of books with --all"
+    )
+
+    str_show = str_sub.add_parser(
+        "show",
+        help="Show the detected structure of a book from the database",
+    )
+    str_show.add_argument("--sha256", required=True, help="source sha256 prefix")
+
+    str_review = str_sub.add_parser(
+        "review",
+        help="List flagged blocks and approve / reject them",
+    )
+    str_review.add_argument("--sha256", required=True, help="source sha256 prefix")
+    str_review.add_argument(
+        "--list", dest="str_list", action="store_true", help="list flagged blocks"
+    )
+    str_review.add_argument(
+        "--approve", metavar="PAGE:SEQ", help="approve a flagged block (e.g. 3:12)"
+    )
+    str_review.add_argument(
+        "--reject", metavar="PAGE:SEQ", help="reject a flagged block (e.g. 3:12)"
+    )
+    str_review.add_argument("--note", help="review note")
+    str_review.add_argument(
+        "--reviewer", default="cli", help="human identity recording this review"
+    )
+
     return parser
 
 
@@ -123,7 +262,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     elif command == "glob":
         commands.cmd_glob(pattern=args.pattern)
     elif command == "normalize":
-        return commands.cmd_normalize(args.file, args.config)
+        if args.normalize_command == "file":
+            return commands.cmd_normalize(args.file, args.config)
+        if args.normalize_command == "run":
+            return commands.cmd_normalize_run(
+                args.sha256,
+                normalize_all_=args.norm_all,
+                limit=args.limit,
+                config_name=args.config,
+            )
     elif command == "ingest":
         return commands.cmd_ingest(args.dir, args.category, dry_run=args.dry_run)
     elif command == "inspect":
@@ -137,6 +284,54 @@ def main(argv: Sequence[str] | None = None) -> int:
             limit=args.limit,
             force=args.force,
         )
+    elif command == "ocr":
+        return commands.cmd_ocr(
+            args.sha256,
+            ocr_all=args.ocr_all,
+            limit=args.limit,
+            force=args.force,
+            engine=args.engine,
+            dpi=args.dpi,
+            languages=args.languages,
+        )
+    elif command == "metadata":
+        if args.meta_command == "extract":
+            return commands.cmd_metadata_extract(
+                args.sha256,
+                metadata_all=args.meta_all,
+                limit=args.limit,
+                pages=args.pages,
+                use_filename=not args.no_filename,
+                user_json=args.user_json,
+            )
+        if args.meta_command == "show":
+            return commands.cmd_metadata_show(args.sha256)
+        if args.meta_command == "review":
+            return commands.cmd_metadata_review(
+                args.sha256,
+                approve=args.approve,
+                reject=args.reject,
+                value=args.value,
+                note=args.note,
+                reviewer=args.reviewer,
+                publish=args.publish,
+            )
+    elif command == "structure":
+        if args.structure_command == "detect":
+            return commands.cmd_structure_detect(
+                args.sha256, structure_all=args.str_all, limit=args.limit
+            )
+        if args.structure_command == "show":
+            return commands.cmd_structure_show(args.sha256)
+        if args.structure_command == "review":
+            return commands.cmd_structure_review(
+                args.sha256,
+                list_blocks=args.str_list,
+                approve=args.approve,
+                reject=args.reject,
+                note=args.note,
+                reviewer=args.reviewer,
+            )
     return 0
 
 

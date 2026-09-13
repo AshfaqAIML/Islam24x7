@@ -92,7 +92,7 @@ def test_cli_normalize(
     src = tmp_path / "sample.txt"
     src.write_text("أحمد إبراهيم آدم 1234\n", encoding="utf-8")
     monkeypatch.setenv("KB_DATA_DIR", str(tmp_path / "kb"))
-    code = main(["normalize", str(src)])
+    code = main(["normalize", "file", str(src)])
     assert code == 0
     out = capsys.readouterr().out
     assert "source_id:" in out
