@@ -47,6 +47,7 @@ def test_kb_help_lists_commands(capsys: pytest.CaptureFixture[str]) -> None:
         "import",
         "process",
         "validate",
+        "ask",
         "search",
         "embed",
         "reindex",
@@ -115,6 +116,27 @@ def test_kb_search_none_found(db_engine: object, capsys: pytest.CaptureFixture[s
     code = main(["search", "nonexistenttermzz", "--limit", "5"])
     assert code == 0
     assert "no results" in capsys.readouterr().err or "no results" in capsys.readouterr().out
+
+
+def test_kb_ask_empty_db_ok(db_engine: object, capsys: pytest.CaptureFixture[str]) -> None:
+    code = main(["ask", "What is the virtue of patience?"])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "Answer" in out
+    assert "No supporting passages" in out
+
+
+def test_kb_ask_json(db_engine: object, capsys: pytest.CaptureFixture[str]) -> None:
+    import json
+
+    code = main(["--json", "ask", "What is the virtue of patience?", "--limit", "3"])
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    for key in ("question", "answer", "grounded", "sources", "ground_notes", "generator", "model"):
+        assert key in payload
+    assert payload["question"] == "What is the virtue of patience?"
+    assert isinstance(payload["sources"], list)
+    assert payload["retrieval_ms"] >= 0
 
 
 def test_kb_embed_no_books(db_engine: object, capsys: pytest.CaptureFixture[str]) -> None:

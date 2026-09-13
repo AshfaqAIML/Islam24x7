@@ -84,6 +84,24 @@ kb search "fiqh" --category fiqh --limit 5
 kb search "sabr" --all-terms --domains content hadith
 ```
 
+### `kb ask <question> [filters]`
+
+Source-grounded question answering (RAG): retrieves passages with hybrid
+keyword + semantic search, then produces an extractive answer that cites its
+sources `[S1] … [Sn]`. Every citation is rebuilt from the stored chunk row.
+
+```pwsh
+kb ask "What is mufradat hadith?"
+kb ask "ما هو الصبر" --language ar
+kb ask "How are narrator chains classified?" --limit 5
+kb ask "What did ibn mulaqqin say about tadlis?" --book 8e3ba21
+```
+
+The output shows a `GROUNDED`/`UNGROUNDED` badge — a verdict from
+`verify_grounding` on how many answer sentences carry a valid citation mask,
+plus the sources and retrieval/generation timings. `--json` prints the full
+answer payload (question, answer, sources, notes, timings).
+
 ### `kb embed [--sha256 <prefix> | --all]`
 
 Generate chunk embeddings (incremental — unchanged chunks are reused).

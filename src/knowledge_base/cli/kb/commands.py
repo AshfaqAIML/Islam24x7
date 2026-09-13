@@ -990,6 +990,62 @@ def cmd_export(
 
 
 # ---------------------------------------------------------------------------
+# ask
+# ---------------------------------------------------------------------------
+
+
+def cmd_ask(
+    question: str,
+    *,
+    language: str | None = None,
+    category: str | None = None,
+    source: str | None = None,
+    author: str | None = None,
+    k: int | None = None,
+    as_json: bool = False,
+) -> int:
+    """Answer a question grounded in the knowledge base."""
+    from knowledge_base.database import create_app_engine, make_session_factory, session_scope
+    from knowledge_base.rag.service import RagService
+
+    settings = _settings()
+    engine = create_app_engine(settings.database_url)
+    factory = make_session_factory(engine)
+    svc = RagService(settings=settings)
+
+    with session_scope(factory) as session:
+        ans = svc.answer(
+            session,
+            question,
+            language=language,
+            category=category,
+            source=source,
+            author=author,
+            k=k,
+        )
+
+    if as_json:
+        from dataclasses import asdict
+
+        return _dump_json(asdict(ans))
+
+    badge = green("GROUNDED") if ans.grounded else yellow("UNGROUNDED")
+    timing = f"{ans.retrieval_ms}ms retrieval + {ans.generation_ms}ms generation"
+    print(f"{cyan('Answer')} — {badge}  {dim(timing)}")
+    print()
+    print(ans.answer or "(no answer)")
+    if ans.sources:
+        print()
+        print(cyan(f"Sources ({len(ans.sources)})"))
+        for i, src in enumerate(ans.sources, 1):
+            print(f"  [{i}] {src.reference}  {dim(f'score={src.score:.3f}')}")
+    if ans.ground_notes:
+        print()
+        print(dim("Notes: " + "; ".join(ans.ground_notes)))
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # internal helpers
 # ---------------------------------------------------------------------------
 
@@ -1021,6 +1077,7 @@ def _resolve_books(
 
 
 __all__ = [
+    "cmd_ask",
     "cmd_embed",
     "cmd_export",
     "cmd_import",

@@ -1,8 +1,8 @@
 """Command-line interface for the Islamic Knowledge Base (``kb``).
 
 A small, high-level CLI for operating the whole system: import files,
-inspect them, run the processing pipeline, search, embed, reindex, validate,
-retry, export, and check status/stats.
+inspect them, run the processing pipeline, ask source-grounded questions,
+search, embed, reindex, validate, retry, export, and check status/stats.
 
 Exit codes:
     0  success
@@ -137,6 +137,20 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     val.add_argument("--sha256", help="validate one source by sha256 prefix")
     val.add_argument("--book", dest="book_id", help="validate one book by UUID")
+
+    # ask ------------------------------------------------------------------
+    ask = sub.add_parser(
+        "ask",
+        help="Answer a question grounded in the knowledge base (source-grounded RAG)",
+    )
+    ask.add_argument("question", help="the question to answer")
+    ask.add_argument(
+        "--language", choices=["ar", "ur", "en"], default=None, help="restrict by language"
+    )
+    ask.add_argument("--category", help="category code (e.g. fiqh, tafsir)")
+    ask.add_argument("--book", dest="source", help="source sha256 prefix")
+    ask.add_argument("--author", help="author name substring")
+    ask.add_argument("--limit", dest="k", type=int, default=None, help="max sources to retrieve")
 
     # search ----------------------------------------------------------------
     search = sub.add_parser(
@@ -294,6 +308,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         if cmd == "validate":
             return commands.cmd_validate(
                 sha256=args.sha256, book_id=args.book_id, as_json=args.as_json
+            )
+        if cmd == "ask":
+            return commands.cmd_ask(
+                args.question,
+                language=args.language,
+                category=args.category,
+                source=args.source,
+                author=args.author,
+                k=args.k,
+                as_json=args.as_json,
             )
         if cmd == "search":
             return commands.cmd_search(
