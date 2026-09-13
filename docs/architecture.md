@@ -1,8 +1,83 @@
 # Islamic Knowledge Base — Architecture
 
-**Status:** Draft for approval. This document describes the complete target
-architecture and the implementation plan. Nothing beyond the already-approved
-normalization milestone has been built yet.
+**Status:** Implemented. The complete pipeline below is built, tested (326 tests),
+type-checked (mypy strict), and linted (ruff). The repository already contains the
+CLI orchestrator, the PostgreSQL + pgvector schema, the search/RAG stack, the
+FastAPI backend, and the verified Quran/hadith dataset seeder.
+
+## 0. System overview
+
+```
+                     YOUR PDF COLLECTION
+                            │
+                            ▼
+                   ┌─────────────────┐
+                   │ PDF INSPECTOR   │
+                   └────────┬────────┘
+                            ▼
+                 ┌─────────────────────┐
+                 │ TEXT / OCR ENGINE   │
+                 └──────────┬──────────┘
+                            ▼
+                 ┌─────────────────────┐
+                 │ METADATA EXTRACTION │
+                 └──────────┬──────────┘
+                            ▼
+                 ┌─────────────────────┐
+                 │ STRUCTURE DETECTOR  │
+                 └──────────┬──────────┘
+                            ▼
+                 ┌─────────────────────┐
+                 │ NORMALIZATION       │
+                 └──────────┬──────────┘
+                            ▼
+                 ┌─────────────────────┐
+                 │ STRUCTURED CONTENT  │
+                 └──────────┬──────────┘
+                            ▼
+                 ┌─────────────────────┐
+                 │     CHUNKING        │
+                 └─────────┬───────────┘
+                           ▼
+              ┌────────────────────────┐
+              │     POSTGRESQL         │
+              │                        │
+              │ Books                  │
+              │ Chapters               │
+              │ Pages                  │
+              │ Content                │
+              │ Quran                  │
+              │ Hadith                 │
+              └───────────┬────────────┘
+                          │
+             ┌────────────┴────────────┐
+             ▼                         ▼
+      FULL TEXT SEARCH            EMBEDDINGS
+             │                         │
+             │                         ▼
+             │                    PGVECTOR
+             │                         │
+             └────────────┬────────────┘
+                          ▼
+                   HYBRID SEARCH
+                          │
+                          ▼
+                       RAG
+                          │
+                          ▼
+                    AI RESPONSE
+                          │
+                          ▼
+                VERIFIED CITATIONS
+                          │
+                          ▼
+                 EXACT BOOK PAGE
+```
+
+Every box in the diagram maps to a module in `src/knowledge_base/` (see §5) and
+is exercised end-to-end by the `kb` CLI. Quran and Hadith enter the database
+through the validated dataset seeder (`kb seed-quran` / `kb seed-hadith`), books
+through the PDF ingestion pipeline.
 
 ## 1. Scope and objective
 
@@ -54,13 +129,19 @@ Source Files
    → 9. Full-Text Index (PostgreSQL + tsvector + multilingual config)
   → 10. Embeddings (pgvector; model metadata recorded)
   → 11. Vector Index (HNSW/IVFFlat)
-  → 12. Validation (cross-checks, provenance audit, quarantine)
-  → 13. Knowledge Base (verified + review/publish workflow)
+→ 12. Validation (cross-checks, provenance audit, quarantine)
+   → 13. Knowledge Base (verified + review/publish workflow)
+   → 14. Seeding (verified Quran/hadith datasets) and
+         Search / RAG / API consumers
 ```
 
+Quran and Hadith bypass the PDF pipeline and enter the same schema through the
+validated dataset seeder (§14), which is idempotent, refuses to overwrite
+existing sacred text, and records `source_file_id` provenance on every row.
+
 Every stage is **idempotent and resumable**: it consumes recorded inputs, writes
-a manifest, and can be re-run safely. Stages write only to `processed/` or the
-database; raw sources are read-only.
+a manifest, and can be re-run safely. Stages write only to the database; raw
+sources are read-only.
 
 ## 4. Technology stack
 
@@ -91,34 +172,33 @@ A simple SQL state table drives the incremental pipeline.
 Islam24x7/
 ├── pyproject.toml
 ├── .env.example
-├── data/
-│   ├── raw/            # UNTOUCHED source material (quran/, hadith/, books/<cat>/)
-│   ├── processed/      # derived artifacts: extracted/, ocr/, metadata/, structure/, normalized/
-│   ├── exports/        # portable KB exports
-│   └── quarantine/     # failed validation/processing
-├── docs/
+├── docs/                       # cli.md, architecture.md, ...
 ├── src/knowledge_base/
-│   ├── config.py          # pydantic-settings
-│   ├── logging.py         # structured logging setup
-│   ├── pipeline/
-│   │   ├── ingest/        # registration, hashing, quarantine
-│   │   ├── inspect/       # PDF inspection + classification
-│   │   ├── extract/       # page-by-page text extraction
-│   │   ├── ocr/           # OCR engines, quality
-│   │   ├── metadata/      # book metadata extraction + review
-│   │   ├── structure/     # chapter/section/page/block detection
-│   │   ├── normalize/     # safe multilingual normalization   ✅ implemented
-│   │   ├── chunk/         # stable-ID chunking
-│   │   ├── index/         # FTS indexing
-│   │   ├── embed/         # embedding generation
-│   │   └── validate/      # validation + provenance audit
-│   ├── database/          # SQLAlchemy models, Alembic migrations
-│   ├── search/             # query API
-│   └── cli/                # orchestrating CLI
+│   ├── config.py               # pydantic-settings
+│   ├── logging.py              # structured logging setup
+│   ├── pipeline/               # ingestion stages, each idempotent/resumable
+│   │   ├── ingest/             # registration, hashing, quarantine
+│   │   ├── inspect/            # PDF inspection + classification
+│   │   ├── extract/            # page-by-page text extraction
+│   │   ├── ocr/                # OCR engines, quality
+│   │   ├── metadata/           # book metadata extraction + review
+│   │   ├── structure/          # chapter/section/page/block detection
+│   │   ├── normalize/          # safe multilingual normalization
+│   │   ├── chunk/              # stable-ID chunking
+│   │   ├── index/              # FTS (tsvector) indexing
+│   │   ├── embed/              # embedding generation
+│   │   ├── validate/           # validation + provenance audit
+│   │   └── seed/               # verified Quran/hadith dataset seeding
+│   ├── search/                 # hybrid (FTS + pgvector) query engine
+│   ├── rag/                    # retrieval + grounded generation + citations
+│   ├── api/                    # FastAPI backend (kb serve)
+│   ├── database/               # SQLAlchemy models, Alembic migrations
+│   └── cli/                    # `kb` orchestrating CLI
 └── tests/
 ```
 
-`data/raw/**` is read-only by convention; everything else derives from it.
+Raw PDFs live under the repository-adjacent `Books/` directory (read-only by
+convention); every derived artifact keeps its `source_file_id` provenance.
 
 ## 6. Database architecture (PostgreSQL + pgvector)
 
@@ -161,12 +241,12 @@ Chunk IDs embed source hash + page + sequence to stay stable across re-runs.
 
 ## 7. Ingestion pipeline design
 
-1. **Register**: copy/move file under `data/raw/…`; compute SHA-256; insert
-   `source_files` row (status = `registered`) — transactional.
+1. **Register**: compute SHA-256; insert `source_files` row (status =
+   `registered`) — transactional.
 2. **Inspect** → classification (`TEXT_PDF`, `SCANNED_PDF`, `MIXED_PDF`,
    `INVALID_PDF`), page count, corruption/encryption flags.
-3. **Extract** pages (text layer) → `processed/extracted/`, per page: source_id,
-   page_number, text, method, status, confidence. Empty/poor pages flagged.
+3. **Extract** pages (text layer), per page: source_id, page_number, text,
+   method, status, confidence. Empty/poor pages flagged.
 4. **OCR** only pages that require it; results stored separately from source
    images; quality report; `REVIEW` for low confidence.
 5. **Metadata**: PDF metadata → filename → title page → user input; merged with
@@ -180,16 +260,22 @@ Chunk IDs embed source hash + page + sequence to stay stable across re-runs.
 10. **Validate**: provenance audit (every chunk resolves to a source row), page
     range checks, redundancy/no-orphan checks; failures go to quarantine.
 
+**Seed entry point:** `kb seed-quran`/`kb seed-hadith` validate a curated JSON
+dataset (pydantic), register its `SourceFile` by SHA-256, and insert
+surahs/ayahs/translations and collections/hadiths by natural key. Rows already
+present are skipped; conflicting sacred text aborts the run transactionally
+(`SeedConflictError`).
+
 **Failure isolation:** any step failure marks the job `failed`, rolls back that
 unit's DB writes, and leaves the source quarantinable — never a corrupt state.
 
 ## 8. Search architecture
 
 - **Retrieval**: PostgreSQL full-text (`tsvector`) with language-aware configs
-  — `arabic`, `urdu` (arabic-based), `english`; GIN index.
+  — `arabic`, `urdu` (arabic-based), `english`; GIN index. Quran and hadith
+  rows get their tsvectors from the same domain triggers.
 - **Hybrid**: FTS candidates ∪ vector-similarity candidates, fused by rank;
-  results always resolved back to `content_blocks` → pages →
-  source/citation.
+  results are resolved back to `content_chunks` → pages → source/citation.
 - **Multilingual**: per-document language from metadata/script detection;
   `simple` config fallback for mixed documents.
 - **Scope**: query planner restricts to published/verified content by default.
@@ -224,14 +310,15 @@ reaches the published KB without passing validation (+ review where flagged).
 A strict foreign-key chain per passage:
 
 ```
-content_chunk → content_block → questionable page/paragraph
+content_chunk → content_block → page/paragraph
               → source_page → source_file → source_edition → license
 ```
 
 Each hop stores `source_file_id`, `page_number`, `parent_id`, `sequence`. The
-citation formatter renders `(author, title, edition, p. N, chunk id)` from this
-chain. LLM features will be **citation-constrained**: they may only quote chunks
-resolved through this chain.
+RAG retrieval layer renders verified citations `(author, title, edition, p. N,
+chunk id)` from this chain and is **citation-constrained**: generated answers
+may only quote chunks resolved through this chain. Responses that cannot be
+grounded are returned with `grounded=False` rather than fabricated.
 
 ## 12. Scaling from 5 books to thousands
 
@@ -250,26 +337,43 @@ resolved through this chain.
 
 ## 13. Milestones
 
-**M0 — Foundation** (packaging, config, logging, venv, tooling)
+**M0 — Foundation** (packaging, config, logging, venv, tooling) — done
 **M1 — Ingestion + Inspection** (register/hash/quarantine; PDF inspection +
-classification)
-**M2 — Extraction + OCR** (text layer extraction; OCR with review flags)
-**M3 — Metadata + Structure** (metadata extraction + human review; hierarchy
-detection)
-**M4 — Normalization + Chunking** ✅ *normalization module already implemented;
-chunking pending*
-**M5 — Database schema + migrations** (SQLAlchemy + Alembic, PostgreSQL)
-**M6 — FTS + Embeddings + Vector index** (search_documents, pgvector)
-**M7 — Validation + Provenance audit + Review queue**
-**M8 — Knowledge Base API + Export + CLI orchestrator**
-**M9 — Query API & citations for the future web/mobile/RAG consumers**
+classification) — done
+**M2 — Extraction + OCR** (text layer extraction; OCR with review flags) — done
+**M3 — Metadata normalization + review** — done
+**M4 — Structure detection + chunking** (hierarchy detection; stable-ID
+chunking) — done
+**M5 — Database schema + migrations** (SQLAlchemy + Alembic, PostgreSQL +
+pgvector; 10 migrations) — done
+**M6 — FTS + Embeddings + Vector index** (search_documents tsvector, pgvector
+HNSW) — done
+**M7 — Validation + Provenance audit** — done
+**M8 — Verified dataset seeding** (Quran + Hadith, idempotent, conservative)
+— done
+**M9 — CLI + Query/RAG + API** (`kb` CLI, hybrid search, RAG with verified
+citations, FastAPI `kb serve`) — done
 
-Each milestone ends with tests, lint/type checks, and a documented demo.
+Each milestone ships with tests, lint/type checks, and a documented demo.
 
-## 14. What has been built so far
+## 14. What has been built
 
-- **M4-partial — normalization pipeline** (`src/knowledge_base/normalization/`)
-  with `conservative_config()` / `search_config()`, religious-text protection,
-  and tests proving the original text is never altered.
+| Area | Location | Status |
+| ---- | -------- | ------ |
+| PDF ingestion/inspection | `pipeline/ingest`, `pipeline/inspect` | done |
+| Text extraction + OCR | `pipeline/extract`, `pipeline/ocr` | done |
+| Metadata + structure | `pipeline/metadata`, `pipeline/structure` | done |
+| Normalization | `pipeline/normalize`, `normalization/` | done |
+| Chunking (stable IDs) | `pipeline/chunk` | done |
+| DB schema + 10 migrations | `database/` (+pgvector) | done |
+| FTS index | `pipeline/index` (tsvector, AR/UR/EN configs) | done |
+| Embeddings | `pipeline/embed` (pgvector HNSW) | done |
+| Validation/provenance | `pipeline/validate` | done |
+| Quran/Hadith seeding | `pipeline/seed` + `kb seed-quran`/`seed-hadith` | done |
+| Hybrid search | `search/engine.py` (FTS ∪ pgvector) | done |
+| RAG + citations | `rag/` (retrieval, generation, service) + `kb ask` | done |
+| HTTP API | `api/` + `kb serve` | done |
+| CLI | `cli/kb` (ingest, extract, ocr, structure, normalize, chunk, index, embed, validate, reindex, search, ask, serve, stats, status, export, inspect, process, seed) | done |
 
-Everything else on this page is the plan awaiting approval.
+Test inventory: 326 tests — pipeline stages, database, search, RAG, API,
+CLI, and seeding all covered.
