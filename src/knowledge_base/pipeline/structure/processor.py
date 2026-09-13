@@ -827,6 +827,7 @@ def _materialize(
                     text=block.text,
                 )
             )
+    session.flush()
 
 
 # --- main entry ----------------------------------------------------------------

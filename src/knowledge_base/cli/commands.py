@@ -1325,6 +1325,211 @@ def cmd_cite(
     return 0
 
 
+def cmd_pipeline_run(
+    sha256: str | None,
+    *,
+    source_path: Path | None = None,
+    category: str = "books",
+    pipeline_all_: bool = False,
+    limit: int | None = None,
+    force: bool = False,
+    auto_review: bool = False,
+    continue_on_error: bool = False,
+    start_from: str | None = None,
+    stop_at: str | None = None,
+    ocr_engine: str | None = None,
+    ocr_dpi: int | None = None,
+    ocr_languages: str | None = None,
+    embed_provider: str | None = None,
+    embed_model: str | None = None,
+    embed_model_version: str | None = None,
+    embed_dimensions: int | None = None,
+    embed_batch_size: int | None = None,
+    as_json: bool = False,
+    reviewer: str = "pipeline",
+) -> int:
+    """Run the end-to-end plan for one source file (or every source)."""
+    from dataclasses import replace
+
+    from sqlalchemy import select
+
+    from knowledge_base.database import create_app_engine, make_session_factory, session_scope
+    from knowledge_base.database.models.sources import SourceFile
+    from knowledge_base.pipeline.embed.config import EmbedConfig
+    from knowledge_base.pipeline.embed.provider import (
+        EmbeddingProviderUnavailable,
+        build_provider,
+    )
+    from knowledge_base.pipeline.ocr.config import OcrConfig
+    from knowledge_base.pipeline.ocr.engines import OcrEngineUnavailable, build_engine
+    from knowledge_base.pipeline.orchestrator import (
+        run_pipeline,
+        run_pipeline_all,
+        run_pipeline_from_file,
+    )
+
+    settings = _settings()
+    if [sha256, source_path is not None, pipeline_all_].count(True) != 1:
+        print("Use exactly one of --sha256 <prefix>, --source <path>, or --all",
+              file=sys.stderr)
+        return 2
+
+    embed_config = EmbedConfig.from_settings(settings)
+    embed_overrides: dict[str, Any] = {}
+    if embed_provider:
+        embed_overrides["provider_name"] = embed_provider
+    if embed_model:
+        embed_overrides["model_name"] = embed_model
+    if embed_model_version:
+        embed_overrides["model_version"] = embed_model_version
+    if embed_dimensions:
+        embed_overrides["dimensions"] = embed_dimensions
+    if embed_batch_size:
+        embed_overrides["batch_size"] = embed_batch_size
+    if embed_overrides:
+        embed_config = replace(embed_config, **embed_overrides)
+    try:
+        provider = build_provider(embed_config.provider_name, embed_config)
+    except EmbeddingProviderUnavailable as exc:
+        print(f"embedding provider unavailable: {exc}; embed stage will be skipped",
+              file=sys.stderr)
+        provider = None
+
+    engine_name = ocr_engine or "tesseract"
+    ocr_config = OcrConfig(
+        engine=engine_name,
+        dpi=ocr_dpi or 300,
+        languages=tuple(ocr_languages.split(",")) if ocr_languages else ("ar",),
+    )
+    try:
+        ocr_backend = build_engine(engine_name, ocr_config)
+    except OcrEngineUnavailable as exc:
+        print(f"OCR engine unavailable: {exc}; OCR stage will be skipped",
+              file=sys.stderr)
+        ocr_backend = None
+
+    kb_engine = create_app_engine(settings.database_url)
+    factory = make_session_factory(kb_engine)
+    with session_scope(factory) as session:
+        if source_path is not None:
+            ingested, pipeline = run_pipeline_from_file(
+                session,
+                source_path,
+                category=category,
+                data_dir=settings.data_dir,
+                force=force,
+                auto_review=auto_review,
+                continue_on_error=continue_on_error,
+                start_from=start_from,
+                stop_at=stop_at,
+                reviewer=reviewer,
+                ocr_engine=ocr_backend,
+                ocr_config=ocr_config,
+                embed_provider=provider,
+                embed_config=embed_config,
+            )
+            if pipeline is None:
+                print(
+                    f"ingestion {ingested.status}"
+                    + (f": {ingested.reason}" if ingested.reason else ""),
+                    file=sys.stderr,
+                )
+                return 4
+            results = [pipeline]
+        elif sha256:
+            source = session.scalar(
+                select(SourceFile).where(SourceFile.sha256.startswith(sha256))
+            )
+            if source is None:
+                print(f"No source matching sha256 prefix {sha256!r}", file=sys.stderr)
+                return 1
+            results = [
+                run_pipeline(
+                    session,
+                    source,
+                    data_dir=settings.data_dir,
+                    force=force,
+                    auto_review=auto_review,
+                    continue_on_error=continue_on_error,
+                    start_from=start_from,
+                    stop_at=stop_at,
+                    reviewer=reviewer,
+                    ocr_engine=ocr_backend,
+                    ocr_config=ocr_config,
+                    embed_provider=provider,
+                    embed_config=embed_config,
+                )
+            ]
+        else:
+            results = run_pipeline_all(
+                session,
+                data_dir=settings.data_dir,
+                limit=limit,
+                force=force,
+                auto_review=auto_review,
+                continue_on_error=continue_on_error,
+                start_from=start_from,
+                stop_at=stop_at,
+                reviewer=reviewer,
+                ocr_engine=ocr_backend,
+                ocr_config=ocr_config,
+                embed_provider=provider,
+                embed_config=embed_config,
+            )
+
+    if as_json:
+        print(json.dumps([r.to_dict() for r in results], ensure_ascii=False, indent=2))
+    else:
+        for result in results:
+            statuses = ", ".join(
+                f"{s.name}={s.status}" for s in result.stages
+            )
+            print(f"pipeline {result.sha256[:12]} <- {result.overall}  ({statuses})")
+            if result.report_path:
+                print(f"    report: {result.report_path}")
+            for s in result.stages:
+                if s.status in ("FAILED", "WAITING"):
+                    print(f"    {s.status:9s} {s.name}: {s.detail}")
+    exit_code = 0
+    for result in results:
+        if result.overall == "FAILED":
+            exit_code = 1
+        elif result.overall == "WAITING" and exit_code == 0:
+            exit_code = 3
+    return exit_code
+
+
+def cmd_pipeline_status(sha256: str, *, as_json: bool = False) -> int:
+    """Show each plan stage's job status for one source file."""
+    from sqlalchemy import select
+
+    from knowledge_base.database import create_app_engine, make_session_factory, session_scope
+    from knowledge_base.database.models.sources import SourceFile
+    from knowledge_base.pipeline.orchestrator import stage_status
+
+    settings = _settings()
+    kb_engine = create_app_engine(settings.database_url)
+    factory = make_session_factory(kb_engine)
+    with session_scope(factory) as session:
+        source = session.scalar(
+            select(SourceFile).where(SourceFile.sha256.startswith(sha256))
+        )
+        if source is None:
+            print(f"No source matching sha256 prefix {sha256!r}", file=sys.stderr)
+            return 1
+        rows = stage_status(session, source)
+
+    if as_json:
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+    else:
+        print(f"Stages for {source.sha256[:12]}:")
+        for row in rows:
+            status = row["status"]
+            detail = row.get("detail") or ""
+            print(f"  {str(status):12s} {row['stage']}  {detail}")
+    return 0
+
+
 __all__ = [
     "cmd_env",
     "cmd_glob",
@@ -1346,5 +1551,7 @@ __all__ = [
     "cmd_similar",
     "cmd_hybrid",
     "cmd_cite",
+    "cmd_pipeline_run",
+    "cmd_pipeline_status",
     "cmd_version",
 ]

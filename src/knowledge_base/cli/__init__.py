@@ -436,6 +436,62 @@ def _build_parser() -> argparse.ArgumentParser:
                       help="max citations (default 20)")
     cite.add_argument("--json", action="store_true", help="print citations as JSON")
 
+    pipeline = sub.add_parser(
+        "pipeline",
+        help="End-to-end ingestion: inspect->extract->ocr->metadata->publish->"
+        "structure->normalize->chunk->index->embed",
+    )
+    pipeline_sub = pipeline.add_subparsers(dest="pipeline_command", required=True)
+    pipe_run = pipeline_sub.add_parser(
+        "run",
+        help="Run the full plan for a source file or raw file (restartable)",
+    )
+    pipe_run.add_argument("--sha256", help="registered source sha256 prefix")
+    pipe_run.add_argument(
+        "--source", dest="source_path", type=Path,
+        help="raw file to ingest first, then pipeline it",
+    )
+    pipe_run.add_argument("--category", default="books",
+                          help="category for --source ingestion (default books)")
+    pipe_run.add_argument("--all", dest="pipeline_all_", action="store_true",
+                          help="run the plan over every registered source")
+    pipe_run.add_argument("--limit", type=int, default=None,
+                          help="cap sources with --all")
+    pipe_run.add_argument("--force", action="store_true",
+                          help="re-run stages even if already completed")
+    pipe_run.add_argument("--auto-review", action="store_true",
+                          help="auto-approve high-confidence metadata and publish")
+    pipe_run.add_argument("--continue-on-error", action="store_true",
+                          help="keep going after a failed stage")
+    pipe_run.add_argument("--from", dest="start_from", default=None,
+                          help="start at this stage (resume)")
+    pipe_run.add_argument("--until", dest="stop_at", default=None,
+                          help="stop after this stage")
+    pipe_run.add_argument(
+        "--ocr-engine", default=None,
+        help="ocr engine: tesseract, easyocr, dummy, or pkg.module:ClassName",
+    )
+    pipe_run.add_argument("--ocr-dpi", type=int, default=None, help="ocr render dpi")
+    pipe_run.add_argument("--ocr-languages", default=None,
+                          help="comma-separated ocr languages (default ar)")
+    pipe_run.add_argument("--embed-provider", default=None,
+                          help="embedding provider (default: settings)")
+    pipe_run.add_argument("--embed-model", default=None,
+                          help="embedding model name (default: settings)")
+    pipe_run.add_argument("--embed-model-version", default=None,
+                          help="embedding model version (default: settings)")
+    pipe_run.add_argument("--embed-dimensions", type=int, default=None,
+                          help="embedding dimensions (default: settings)")
+    pipe_run.add_argument("--embed-batch-size", type=int, default=None,
+                          help="embedding batch size (default: settings)")
+    pipe_run.add_argument("--json", action="store_true", help="print outcomes as JSON")
+    pipe_status = pipeline_sub.add_parser(
+        "status", help="Show per-stage status for a source file"
+    )
+    pipe_status.add_argument("sha256", help="source sha256 prefix")
+    pipe_status.add_argument("--json", action="store_true",
+                             help="print raw stage status as JSON")
+
     return parser
 
 
@@ -602,6 +658,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         return commands.cmd_cite(
             args.sha256,
             limit=args.limit,
+            as_json=args.json,
+        )
+    elif command == "pipeline" and args.pipeline_command == "run":
+        return commands.cmd_pipeline_run(
+            args.sha256,
+            source_path=args.source_path,
+            category=args.category,
+            pipeline_all_=args.pipeline_all_,
+            limit=args.limit,
+            force=args.force,
+            auto_review=args.auto_review,
+            continue_on_error=args.continue_on_error,
+            start_from=args.start_from,
+            stop_at=args.stop_at,
+            ocr_engine=args.ocr_engine,
+            ocr_dpi=args.ocr_dpi,
+            ocr_languages=args.ocr_languages,
+            embed_provider=args.embed_provider,
+            embed_model=args.embed_model,
+            embed_model_version=args.embed_model_version,
+            embed_dimensions=args.embed_dimensions,
+            embed_batch_size=args.embed_batch_size,
+            as_json=args.json,
+        )
+    elif command == "pipeline" and args.pipeline_command == "status":
+        return commands.cmd_pipeline_status(
+            args.sha256,
             as_json=args.json,
         )
     return 0
