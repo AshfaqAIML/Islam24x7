@@ -2,7 +2,8 @@
 
 A small, high-level CLI for operating the whole system: import files,
 inspect them, run the processing pipeline, ask source-grounded questions,
-search, embed, reindex, validate, retry, export, and check status/stats.
+search, embed, reindex, validate, retry, export, serve the API, and check
+status/stats.
 
 Exit codes:
     0  success
@@ -174,6 +175,15 @@ def _build_parser() -> argparse.ArgumentParser:
     search.add_argument("--book", dest="source", help="source sha256 prefix")
     search.add_argument("--author", help="author name substring")
     search.add_argument("--limit", type=int, default=20, help="max results (default 20)")
+
+    # serve -----------------------------------------------------------------
+    serve = sub.add_parser(
+        "serve",
+        help="Run the HTTP API server (uvicorn)",
+    )
+    serve.add_argument("--host", default="127.0.0.1", help="bind host (default 127.0.0.1)")
+    serve.add_argument("--port", type=int, default=8000, help="bind port (default 8000)")
+    serve.add_argument("--reload", action="store_true", help="auto-reload on source changes")
 
     # embed -----------------------------------------------------------------
     embed = sub.add_parser("embed", help="Generate chunk embeddings for vector search")
@@ -352,6 +362,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         if cmd == "status":
             return commands.cmd_status(as_json=args.as_json)
+        if cmd == "serve":
+            return commands.cmd_serve(host=args.host, port=args.port, reload=args.reload)
         if cmd == "retry":
             return commands.cmd_retry(
                 sha256=args.sha256,

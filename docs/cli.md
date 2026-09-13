@@ -132,6 +132,19 @@ pages per chunk.
 Export each book's metadata and chunks to a JSON file under
 `--out <dir>` (default `data/exports`).
 
+### `kb serve [--host <addr>] [--port <port>] [--reload]`
+
+Run the HTTP API (uvicorn) exposing the knowledge base over JSON:
+
+- `GET  /health` — liveness probe
+- `GET  /status` — dashboard counts
+- `POST /ask`    — source-grounded RAG answer (`{"question": "…", "k": 5}`)
+- `POST /search` — full-text search (`{"query": "…", "limit": 10}`)
+
+```pwsh
+kb serve --host 127.0.0.1 --port 8000
+```
+
 ## Testing
 
 `tests/test_kb_cli.py` covers parsing, dispatch, dry-runs, and exit codes

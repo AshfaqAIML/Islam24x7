@@ -1045,6 +1045,17 @@ def cmd_ask(
     return 0
 
 
+def cmd_serve(*, host: str = "127.0.0.1", port: int = 8000, reload: bool = False) -> int:
+    """Run the HTTP API server (uvicorn)."""
+    import uvicorn
+
+    from knowledge_base.api import create_app
+
+    _info(f"serving API on http://{host}:{port}")
+    uvicorn.run(create_app(), host=host, port=port, reload=reload)
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # internal helpers
 # ---------------------------------------------------------------------------
@@ -1086,6 +1097,7 @@ __all__ = [
     "cmd_reindex",
     "cmd_retry",
     "cmd_search",
+    "cmd_serve",
     "cmd_status",
     "cmd_stats",
     "cmd_validate",
