@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from knowledge_base.database.models.quran import Ayah, Surah, Translation
 from knowledge_base.database.models.sources import SourceFile
 from knowledge_base.pipeline.seed.datasets import AyahPayload, QuranDataset
 from knowledge_base.pipeline.seed.report import SeedConflictError, SeedReport
+from knowledge_base.search.arabic import normalize_arabic_search
 
 
 def seed_quran(session: Session, source_file: SourceFile, dataset: QuranDataset) -> SeedReport:
@@ -65,6 +66,9 @@ def _upsert_ayah(
             text=ayah_payload.text,
             page_number=ayah_payload.page,
             juz=ayah_payload.juz,
+            search_vector_norm=func.to_tsvector(
+                "simple", normalize_arabic_search(ayah_payload.text)
+            ),
         )
         session.add(ayah)
         session.flush()

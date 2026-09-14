@@ -302,13 +302,13 @@ def _search_quran(session: Session, params: SearchParams, tq: Any) -> list[Searc
     hits: list[SearchHit] = []
 
     if lang in (None, "ar", "other"):
-        rank = _ts_rank(Ayah.search_vector, tq)
+        rank = _ts_rank(func.coalesce(Ayah.search_vector_norm, Ayah.search_vector), tq)
         rows = session.execute(
             select(Ayah, Surah, SourceFile, rank, _headline(Ayah.text, tq))
             .join(Surah, Ayah.surah_id == Surah.id)
             .join(SourceFile, Ayah.source_file_id == SourceFile.id)
             .where(
-                Ayah.search_vector.op("@@")(tq),
+                func.coalesce(Ayah.search_vector_norm, Ayah.search_vector).op("@@")(tq),
                 *_sha_prefix_filter(params.source),
             )
             .order_by(rank.desc())

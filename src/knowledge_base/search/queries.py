@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from knowledge_base.database.enums import Language
 from knowledge_base.normalization import normalize_text
 from knowledge_base.pipeline.normalize.processor import resolve_config
+from knowledge_base.search.arabic import normalize_arabic_search
 
 _QUOTED = re.compile(r'"([^"]+)"')
 
@@ -38,9 +39,7 @@ def parse_query(text: str) -> ParsedQuery:
     text = text.strip()
     if not text:
         return ParsedQuery()
-    phrases = tuple(
-        m.group(1).strip() for m in _QUOTED.finditer(text) if m.group(1).strip()
-    )
+    phrases = tuple(m.group(1).strip() for m in _QUOTED.finditer(text) if m.group(1).strip())
     remainder = _QUOTED.sub(" ", text)
     terms = tuple(t for t in remainder.split() if t and not set(t).issubset('" '))
     return ParsedQuery(terms=terms, phrases=phrases)
@@ -63,7 +62,10 @@ def normalize_query_text(text: str, language: Language | None = None) -> str:
     if language is None:
         language = sniff_language(text)
     _, config = resolve_config("auto", language)
-    return normalize_text(text, config).normalized
+    normalized = normalize_text(text, config).normalized
+    if language is Language.ARABIC:
+        normalized = normalize_arabic_search(normalized)
+    return normalized
 
 
 def build_websearch(query: str, *, all_terms: bool = False) -> str:

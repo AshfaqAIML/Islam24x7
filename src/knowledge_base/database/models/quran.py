@@ -50,6 +50,11 @@ class Ayah(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Index("ix_ayahs_surah_id", "surah_id"),
         Index("ix_ayahs_number", "number"),
         Index("ix_ayahs_search_vector", "search_vector", postgresql_using="gin"),
+        Index(
+            "ix_ayahs_search_vector_norm",
+            "search_vector_norm",
+            postgresql_using="gin",
+        ),
     )
 
     surah_id: Mapped[uuid.UUID] = mapped_column(
@@ -63,6 +68,10 @@ class Ayah(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     juz: Mapped[int | None] = mapped_column(Integer, nullable=True)
     search_vector: Mapped[str | None] = mapped_column(TSVECTOR, nullable=True)
+    # Diacritic-stripped, letter-normalized Arabic vector (see search/arabic.py).
+    # Populated by the seed/backfill layer so Unicode variant letters match
+    # queries typed without tashkeel.
+    search_vector_norm: Mapped[str | None] = mapped_column(TSVECTOR, nullable=True)
 
     surah: Mapped[Surah] = relationship(back_populates="ayahs")
     source_file: Mapped[SourceFile] = relationship()

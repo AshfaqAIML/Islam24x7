@@ -36,6 +36,7 @@ from knowledge_base.pipeline.chunk.config import ChunkConfig
 from knowledge_base.pipeline.chunk.processor import chunk_book
 from knowledge_base.pipeline.index.index import index_book
 from knowledge_base.search import SearchParams, search
+from knowledge_base.search.arabic import normalize_arabic_search
 
 
 def _make_book(
@@ -51,25 +52,19 @@ def _make_book(
     category_code: str | None = None,
     author_name: str | None = None,
 ) -> tuple[Book, SourceFile, Chapter, Section]:
-    source = SourceFile(
-        sha256=sha256, file_path=f"books/{sha256}.pdf", format=SourceFormat.PDF
-    )
+    source = SourceFile(sha256=sha256, file_path=f"books/{sha256}.pdf", format=SourceFormat.PDF)
     session.add(source)
     session.flush()
     book = Book(source_file_id=source.id, title=title, language=language)
     if category_code:
-        category = session.scalar(
-            select(Category).where(Category.code == category_code)
-        )
+        category = session.scalar(select(Category).where(Category.code == category_code))
         if category is None:
             category = Category(code=category_code, name=category_code.capitalize())
             session.add(category)
             session.flush()
         book.category_id = category.id
     if author_name:
-        author = session.scalar(
-            select(Author).where(Author.name == author_name)
-        )
+        author = session.scalar(select(Author).where(Author.name == author_name))
         if author is None:
             author = Author(name=author_name)
             session.add(author)
@@ -77,13 +72,14 @@ def _make_book(
         book.author_id = author.id
     session.add(book)
     session.flush()
-    chapter = Chapter(
-        book_id=book.id, number=1, title=chapter_title, source_file_id=source.id
-    )
+    chapter = Chapter(book_id=book.id, number=1, title=chapter_title, source_file_id=source.id)
     session.add(chapter)
     session.flush()
     section = Section(
-        book_id=book.id, chapter_id=chapter.id, number=1, title=section_title,
+        book_id=book.id,
+        chapter_id=chapter.id,
+        number=1,
+        title=section_title,
         source_file_id=source.id,
     )
     session.add(section)
@@ -95,8 +91,10 @@ def _make_book(
     ):
         if page_no not in page_rows:
             page = Page(
-                book_id=book.id, source_file_id=source.id,
-                page_number=page_no, has_text=True,
+                book_id=book.id,
+                source_file_id=source.id,
+                page_number=page_no,
+                has_text=True,
             )
             session.add(page)
             session.flush()
@@ -123,24 +121,29 @@ def _make_quran(
     translation_text: str | None = None,
     surah_name: str = "الفاتحة",
 ) -> tuple[SourceFile, Surah, Ayah]:
-    source = SourceFile(
-        sha256="aa" * 32, file_path="quran/aa.pdf", format=SourceFormat.PDF
-    )
+    source = SourceFile(sha256="aa" * 32, file_path="quran/aa.pdf", format=SourceFormat.PDF)
     session.add(source)
     surah = Surah(number=1, name_arabic=surah_name, name_en="Al-Fatiha", ayah_count=1)
     session.add(surah)
     session.flush()
     ayah = Ayah(
-        surah_id=surah.id, source_file_id=source.id, number=1,
-        text=arabic, page_number=1, juz=1,
+        surah_id=surah.id,
+        source_file_id=source.id,
+        number=1,
+        text=arabic,
+        page_number=1,
+        juz=1,
     )
     session.add(ayah)
     session.flush()
     if translation_text is not None:
         session.add(
             Translation(
-                ayah_id=ayah.id, source_file_id=source.id,
-                language="en", translator="Test", text=translation_text,
+                ayah_id=ayah.id,
+                source_file_id=source.id,
+                language="en",
+                translator="Test",
+                text=translation_text,
             )
         )
     session.flush()
@@ -153,18 +156,17 @@ def _make_hadith(
     text: str,
     text_arabic: str | None = None,
 ) -> tuple[SourceFile, Collection, Hadith]:
-    source = SourceFile(
-        sha256="bb" * 32, file_path="hadith/bb.pdf", format=SourceFormat.PDF
-    )
+    source = SourceFile(sha256="bb" * 32, file_path="hadith/bb.pdf", format=SourceFormat.PDF)
     session.add(source)
-    collection = Collection(
-        name="bukhari", title="Sahih al-Bukhari", author="Al-Bukhari"
-    )
+    collection = Collection(name="bukhari", title="Sahih al-Bukhari", author="Al-Bukhari")
     session.add(collection)
     session.flush()
     hadith = Hadith(
-        collection_id=collection.id, source_file_id=source.id,
-        number=1, text=text, text_arabic=text_arabic,
+        collection_id=collection.id,
+        source_file_id=source.id,
+        number=1,
+        text=text,
+        text_arabic=text_arabic,
     )
     session.add(hadith)
     session.flush()
@@ -181,22 +183,19 @@ def _backfill_vectors(session: Session) -> None:
             )
         )
     )
+    session.execute(update(Ayah).values(search_vector=func.to_tsvector("simple", Ayah.text)))
+    for ayah in session.scalars(select(Ayah)):
+        ayah.search_vector_norm = func.to_tsvector("simple", normalize_arabic_search(ayah.text))
     session.execute(
-        update(Ayah).values(
-            search_vector=func.to_tsvector("simple", Ayah.text)
-        )
-    )
-    session.execute(
-        update(Translation).values(
-            search_vector=func.to_tsvector("simple", Translation.text)
-        )
+        update(Translation).values(search_vector=func.to_tsvector("simple", Translation.text))
     )
     session.execute(
         update(Hadith).values(
             search_vector=func.to_tsvector(
                 "simple",
-                func.concat(func.coalesce(Hadith.text, ""), " ",
-                            func.coalesce(Hadith.text_arabic, "")),
+                func.concat(
+                    func.coalesce(Hadith.text, ""), " ", func.coalesce(Hadith.text_arabic, "")
+                ),
             )
         )
     )
@@ -205,7 +204,9 @@ def _backfill_vectors(session: Session) -> None:
 
 def _indexed(session: Session, book: Book, data_dir: Path) -> list[ContentChunk]:
     result = chunk_book(
-        book, session=session, data_dir=data_dir,
+        book,
+        session=session,
+        data_dir=data_dir,
         config=ChunkConfig(max_tokens=16, overlap_tokens=0),
     )
     session.flush()
@@ -214,9 +215,7 @@ def _indexed(session: Session, book: Book, data_dir: Path) -> list[ContentChunk]
     session.flush()
     _backfill_vectors(session)
     return session.scalars(
-        select(ContentChunk)
-        .where(ContentChunk.book_id == book.id)
-        .order_by(ContentChunk.sequence)
+        select(ContentChunk).where(ContentChunk.book_id == book.id).order_by(ContentChunk.sequence)
     ).all()
 
 
@@ -227,6 +226,7 @@ TEXTS = [
 
 
 # ------------------------------------------------------------- index stage
+
 
 def test_index_book_populates_search_documents(db: Session, tmp_path: Path) -> None:
     book, source, _, _ = _make_book(db, "11" * 32, "en", TEXTS, title="Trusted Path")
@@ -270,9 +270,9 @@ def test_index_book_idempotent(db: Session, tmp_path: Path) -> None:
     assert result.error is None
     assert result.document_count == len(chunks1)
     count = db.scalar(
-        select(func.count()).select_from(SearchDocument).where(
-            SearchDocument.content_chunk_id.in_([c.id for c in chunks1])
-        )
+        select(func.count())
+        .select_from(SearchDocument)
+        .where(SearchDocument.content_chunk_id.in_([c.id for c in chunks1]))
     )
     assert count == len(chunks1)
 
@@ -296,6 +296,7 @@ def test_index_book_no_chunks_failed_job(db: Session, tmp_path: Path) -> None:
 
 
 # ----------------------------------------------------------------- searches
+
 
 def test_search_keyword_content_with_provenance(db: Session, tmp_path: Path) -> None:
     book, source, chapter, section = _make_book(db, "44" * 32, "en", TEXTS)
@@ -337,15 +338,16 @@ def test_search_multi_term_any_and_all(db: Session, tmp_path: Path) -> None:
     both = search(db, SearchParams(query="prayer worship", domains=("content",)))
     assert both and "worship" in both[0].matched_text.lower()
 
-    none = search(db, SearchParams(
-        query="prayer sunnah", all_terms=True, domains=("content",)
-    ))
+    none = search(db, SearchParams(query="prayer sunnah", all_terms=True, domains=("content",)))
     assert not none  # no single chunk contains both words
 
 
 def test_search_book_chapter_section_domains(db: Session, tmp_path: Path) -> None:
     book, _, _, _ = _make_book(
-        db, "47" * 32, "en", ["Body text."],
+        db,
+        "47" * 32,
+        "en",
+        ["Body text."],
         title="Riyad as-Salihin",
         chapter_title="On Prayer",
         section_title="Evening Remembrances",
@@ -366,31 +368,28 @@ def test_search_book_chapter_section_domains(db: Session, tmp_path: Path) -> Non
 
 def test_search_filters(db: Session, tmp_path: Path) -> None:
     book, source, _, _ = _make_book(
-        db, "48" * 32, "en", TEXTS,
-        title="Fiqh of Worship", category_code="fiqh", author_name="Al-Ghazali",
+        db,
+        "48" * 32,
+        "en",
+        TEXTS,
+        title="Fiqh of Worship",
+        category_code="fiqh",
+        author_name="Al-Ghazali",
     )
     other, _, _, _ = _make_book(db, "49" * 32, "ar", TEXTS, title="متن آخر")
     _indexed(db, book, tmp_path)
     _indexed(db, other, tmp_path)
 
-    by_category = search(db, SearchParams(
-        query="prayer", domains=("content",), category="fiqh"
-    ))
+    by_category = search(db, SearchParams(query="prayer", domains=("content",), category="fiqh"))
     assert by_category and all(h.book == "Fiqh of Worship" for h in by_category)
 
-    by_author = search(db, SearchParams(
-        query="prayer", domains=("content",), author="al-ghazali"
-    ))
+    by_author = search(db, SearchParams(query="prayer", domains=("content",), author="al-ghazali"))
     assert by_author and by_author[0].author == "Al-Ghazali"
 
-    by_language = search(db, SearchParams(
-        query="prayer", domains=("content",), language="en"
-    ))
+    by_language = search(db, SearchParams(query="prayer", domains=("content",), language="en"))
     assert by_language and all(h.language == "en" for h in by_language)
 
-    by_source = search(db, SearchParams(
-        query="prayer", domains=("content",), source="48" * 8
-    ))
+    by_source = search(db, SearchParams(query="prayer", domains=("content",), source="48" * 8))
     assert by_source and all(h.source_file_id == str(source.id) for h in by_source)
 
     by_domain = search(db, SearchParams(query="riyad", domains=("book",)))
@@ -414,19 +413,33 @@ def test_search_quran_translation(db: Session, tmp_path: Path) -> None:
     _make_quran(db, arabic="سبحان", translation_text="Glory be to God")
     _backfill_vectors(db)
 
-    hits = search(db, SearchParams(
-        query="glory", domains=("quran",), language="en"
-    ))
+    hits = search(db, SearchParams(query="glory", domains=("quran",), language="en"))
     assert hits
     assert hits[0].language == "en"
     assert "Glory" in hits[0].matched_text
     assert "Test" in hits[0].citation
 
 
+def test_search_quran_modern_arabic_matches_diacritics(db: Session, tmp_path: Path) -> None:
+    # Qur'anic orthography: alef-wasla, superscript alef, full tashkeel.
+    _make_quran(db, arabic="ٱلرَّحْمَٰنِ ٱلرَّحِيمِ")
+    _backfill_vectors(db)
+
+    plain = search(db, SearchParams(query="الرحمن", domains=("quran",)))
+    assert plain
+    assert plain[0].domain == "quran"
+    assert plain[0].citation == "1:1"
+
+    diacritics = search(db, SearchParams(query="ٱلرَّحْمَٰنِ", domains=("quran",)))
+    assert diacritics
+    assert diacritics[0].citation == "1:1"
+
+    unrelated = search(db, SearchParams(query="القرآن", domains=("quran",)))
+    assert not unrelated
+
+
 def test_search_hadith_text_and_arabic(db: Session, tmp_path: Path) -> None:
-    _make_hadith(
-        db, text="Actions are by intentions", text_arabic="إنما الأعمال بالنيات"
-    )
+    _make_hadith(db, text="Actions are by intentions", text_arabic="إنما الأعمال بالنيات")
     _backfill_vectors(db)
 
     en = search(db, SearchParams(query="intentions", domains=("hadith",)))
