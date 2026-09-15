@@ -46,6 +46,7 @@ class SearchRequest(BaseModel):
     """Full-text search parameters."""
 
     query: str = Field(..., min_length=1, max_length=500)
+    domains: list[str] | None = Field(default=None, max_length=16)
     all_terms: bool = False
     language: str | None = Field(default=None, pattern="^(ar|ur|en)$")
     category: str | None = None

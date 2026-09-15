@@ -75,6 +75,30 @@ def test_search_missing_query_is_422(client: TestClient) -> None:
     assert r.status_code == 422
 
 
+def test_search_with_domains(client: TestClient) -> None:
+    r = client.post(
+        "/search",
+        json={"query": "mercy", "domains": ["quran"], "limit": 5},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["query"] == "mercy"
+    assert isinstance(body["hits"], list)
+
+
+def test_search_domains_default_all(client: TestClient) -> None:
+    r1 = client.post("/search", json={"query": "mercy", "limit": 5})
+    r2 = client.post(
+        "/search",
+        json={
+            "query": "mercy",
+            "domains": ["content", "book", "chapter", "section", "quran", "hadith"],
+            "limit": 5,
+        },
+    )
+    assert r1.json()["hits"] == r2.json()["hits"]
+
+
 def test_ask_get_not_allowed(client: TestClient) -> None:
     r = client.get("/ask")
     assert r.status_code == 405

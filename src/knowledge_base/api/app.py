@@ -110,7 +110,9 @@ def create_app() -> FastAPI:
 
         params = SearchParams(
             query=req.query,
-            domains=("content", "book", "chapter", "section", "quran", "hadith"),
+            domains=tuple(req.domains)
+            if req.domains
+            else ("content", "book", "chapter", "section", "quran", "hadith"),
             all_terms=req.all_terms,
             language=req.language,
             category=req.category,
